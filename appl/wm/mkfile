@@ -1,0 +1,26 @@
+<../../mkconfig
+
+TARG=\
+	vixen.dis\
+
+MODULES=\
+	vixen/buffers.b\
+	vixen/change.b\
+	vixen/cmd.b\
+	vixen/filter.b\
+
+SYSMODULES=\
+	arg.m\
+	bufio.m\
+	draw.m\
+	keyboard.m\
+	plumbmsg.m\
+	string.m\
+	sys.m\
+	tk.m\
+	tkclient.m\
+	util0.m\
+
+DISBIN=$ROOT/dis/wm
+
+<$ROOT/mkfiles/mkdis
