@@ -4,7 +4,7 @@ filter1(cmd: string, fd0, fd1: ref Sys->FD, resc: chan of (string, string), pidc
 	sys->pctl(Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, list of {fd0.fd, fd1.fd, 2});
 	sys->dup(fd0.fd, 0);
 	sys->dup(fd1.fd, 1);
-	fd0 = fd1 = nil; # xxx keep ref to new fd's?
+	fd0 = fd1 = nil;
 	err := sh->system(drawcontext, cmd);
 	if(err != nil)
 		resc <-= (nil, err);

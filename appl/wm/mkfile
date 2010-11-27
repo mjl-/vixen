@@ -8,6 +8,7 @@ MODULES=\
 	vixen/change.b\
 	vixen/cmd.b\
 	vixen/filter.b\
+	vixen/subs.b\
 
 SYSMODULES=\
 	arg.m\

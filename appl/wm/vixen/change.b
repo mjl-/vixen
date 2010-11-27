@@ -1,14 +1,11 @@
 Mod: adt {
+	o: int;
+	p: Pos;
+	s: string;
 	pick {
 	Ins or
 	Del =>
 		# o & p are for start of change
-		o: int;
-		p: Pos;
-		s: string;
-	# Repl
-	# del: ref Mod.Del;
-	# ins: ref Mod.Ins;
 	}
 
 	invert:	fn(m: self ref Mod): ref Mod;
@@ -16,12 +13,12 @@ Mod: adt {
 };
 
 Change: adt {
-	begin,
-	end:	Pos;
-	l:	list of ref Mod;  # hd of list is change at end of file
+	inverted:	int;  # whether this is inverted.  significant for cursor position after applying
+	l:	list of ref Mod;  # hd of list is last modification (also at later positions in file)
 
-	invert:	fn(c: self ref Change): ref Change;
-	text:	fn(c: self ref Change): string;
+	beginpos:	fn(c: self ref Change): Pos;
+	invert:		fn(c: self ref Change): ref Change;
+	text:		fn(c: self ref Change): string;
 };
 
 
@@ -45,9 +42,18 @@ Mod.text(mm: self ref Mod): string
 	return s;
 }
 
+Change.beginpos(c: self ref Change): Pos
+{
+	if(c.inverted)
+		m := hd c.l;
+	else
+		m = hd rev(c.l);
+	return m.p;
+}
+
 Change.invert(cc: self ref Change): ref Change
 {
-	c := ref Change (cc.end, cc.begin, nil);
+	c := ref Change (!cc.inverted, nil);
 	for(l := rev(cc.l); l != nil; l = tl l)
 		c.l = (hd l).invert()::c.l;
 	return c;
@@ -55,9 +61,9 @@ Change.invert(cc: self ref Change): ref Change
 
 Change.text(c: self ref Change): string
 {
-	s := sprint("Change(begin=%s, end=%s, ", c.begin.text(), c.end.text());
+	s := sprint("Change(inverted=%d\n", c.inverted);
 	for(l := c.l; l != nil; l = tl l)
-		s += (hd l).text()+"; ";
+		s += "\t"+(hd l).text()+"\n";
 	s += ")";
 	return s;
 }

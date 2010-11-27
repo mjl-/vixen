@@ -4,23 +4,35 @@ Cmd: adt {
 	n1,
 	n2:	string;
 
-	new:		fn(s: string): ref Cmd;
+	new:		fn(): ref Cmd;
+	mk:		fn(s: string): ref Cmd;
 	clone:		fn(c: self ref Cmd): ref Cmd;
 	char:		fn(c: self ref Cmd): int;
 	get:		fn(c: self ref Cmd): int;
+	xget:		fn(c: self ref Cmd): int;
+	put:		fn(c: self ref Cmd, c: int);
 	unget:		fn(c: self ref Cmd);
-	isnum:		fn(c: self ref Cmd): int;
+	havenum:	fn(c: self ref Cmd): int;
 	more:		fn(c: self ref Cmd): int;
 	rem:		fn(c: self ref Cmd): string;
 	num1:		fn(c: self ref Cmd, def: int): int;
 	num2:		fn(c: self ref Cmd, def: int): int;
 	getnum:		fn(c: self ref Cmd): string;
+	xgetnum:	fn(c: self ref Cmd): string;
 	getnum1:	fn(c: self ref Cmd);
 	getnum2:	fn(c: self ref Cmd);
+	xgetnum1:	fn(c: self ref Cmd);
+	xgetnum2:	fn(c: self ref Cmd);
+	str:		fn(c: self ref Cmd): string;
 	text:		fn(c: self ref Cmd): string;
 };
 
-Cmd.new(s: string): ref Cmd
+Cmd.new(): ref Cmd
+{
+	return Cmd.mk(nil);
+}
+
+Cmd.mk(s: string): ref Cmd
 {
 	return ref Cmd (0, s, "", "");
 }
@@ -44,6 +56,17 @@ Cmd.get(c: self ref Cmd): int
 	return c.s[c.i++];
 }
 
+Cmd.xget(c: self ref Cmd): int
+{
+	if(!c.more())
+		raise "more:";
+	return c.get();
+}
+
+Cmd.put(c: self ref Cmd, x: int)
+{
+	c.s[len c.s] = x;
+}
 
 Cmd.unget(c: self ref Cmd)
 {
@@ -52,10 +75,19 @@ Cmd.unget(c: self ref Cmd)
 	--c.i;
 }
 
-Cmd.isnum(c: self ref Cmd): int
+# whether we have a whole num in the buffer
+Cmd.havenum(c: self ref Cmd): int
 {
 	x := c.char();
-	return x >= 0 && str->in(x, "1-9");
+	if(x < 0 || !str->in(x, "1-9"))
+		return 0;
+	# look for a non-num to finish the num
+	for(i := c.i+1; i < len c.s; i++) {
+		x = c.s[i];
+		if(x < '0' || x > '9')
+			return 1;
+	}
+	return 0;
 }
 
 Cmd.more(c: self ref Cmd): int
@@ -85,12 +117,20 @@ Cmd.num2(c: self ref Cmd, def: int): int
 Cmd.getnum(c: self ref Cmd): string
 {
 	s := "";
-	if(c.isnum()) {
+	if(c.havenum()) {
 		s[len s] = c.get();
 		while(c.more() && str->in(c.char(), "0-9"))
 			s[len s] = c.get();
 	}
 	return s;
+}
+
+Cmd.xgetnum(c: self ref Cmd): string
+{
+	x := c.char();
+	if(x >= 0 && str->in(x, "1-9") && !c.havenum())
+		raise "more:";
+	return c.getnum();
 }
 
 Cmd.getnum1(c: self ref Cmd)
@@ -102,6 +142,21 @@ Cmd.getnum2(c: self ref Cmd)
 {
 
 	c.n2 = c.getnum();
+}
+
+Cmd.xgetnum1(c: self ref Cmd)
+{
+	c.n1 = c.xgetnum();
+}
+
+Cmd.xgetnum2(c: self ref Cmd)
+{
+	c.n2 = c.xgetnum();
+}
+
+Cmd.str(c: self ref Cmd): string
+{
+	return c.s;
 }
 
 Cmd.text(c: self ref Cmd): string

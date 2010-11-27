@@ -6,7 +6,9 @@ Pos: adt {
 	parse:		fn(s: string): Pos;
 	text:		fn(p: self Pos): string;
 };
+nullpos: Pos;
 
+Colkeep, Colstart, Colfirstnonblank, Colend, Colpastnewline: con -iota-1;  # mvline's colmv
 Cursor: adt {
 	b:	ref Buf;
 	o:	int;	# offset into buf.  o can be set to length of buffer
@@ -20,19 +22,21 @@ Cursor: adt {
 	walk:		fn(c: self ref Cursor, rev: int): int;
 
 	mvchar,
-	mvline:		fn(c: self ref Cursor, rel: int): ref Cursor;
 	mvcol:		fn(c: self ref Cursor, col: int): ref Cursor;
+	mvline:		fn(c: self ref Cursor, rel: int, colmv: int): ref Cursor;
 	mvpos:		fn(c: self ref Cursor, p: Pos): ref Cursor;
 	mvlineend:	fn(c: self ref Cursor, nl: int): ref Cursor;
 	mvword,
 	mvwordend:	fn(c: self ref Cursor, capital: int, n: int): ref Cursor;
-	skip:		fn(c: self ref Cursor, cl: string): ref Cursor;
-	skipws:		fn(c: self ref Cursor): ref Cursor;
+	mvbegin:	fn(c: self ref Cursor): ref Cursor;
+	mvskip:		fn(c: self ref Cursor, cl: string): ref Cursor;
 
 	word:		fn(c: self ref Cursor): (ref Cursor, ref Cursor);
 	findchar:	fn(c: self ref Cursor, cl: string, rev: int): ref Cursor;
 	findstr:	fn(c: self ref Cursor, s: string, rev: int): ref Cursor;
+	findlinechar:	fn(c: self ref Cursor, x: int, rev: int): ref Cursor;
 
+	cmp:		fn(a, b: ref Cursor): int;
 	order:		fn(a, b: ref Cursor): (ref Cursor, ref Cursor);
 	linelength:	fn(c: self ref Cursor, nl: int): int;
 	text:		fn(c: self ref Cursor): string;
@@ -187,9 +191,26 @@ Cursor.mvchar(cc: self ref Cursor, rel: int): ref Cursor
 }
 
 # move cursor by 'rel' lines, try to keep cursor on same col.
-Cursor.mvline(c: self ref Cursor, rel: int): ref Cursor
+Cursor.mvline(c: self ref Cursor, rel: int, colmv: int): ref Cursor
 {
-	return c.mvpos(Pos (max(1, c.pos.l+rel), c.pos.c));
+	c = c.clone();
+	col := 0;
+	if(colmv == Colkeep)
+		col = c.pos.c;
+	else if(colmv >= 0)
+		col = colmv;
+	c = c.mvpos(Pos (max(1, c.pos.l+rel), col));
+	case colmv {
+	Colkeep =>	{}
+	Colstart =>	{}
+	Colfirstnonblank =>	c = c.mvbegin();
+	Colend =>		c = c.mvlineend(0);
+	Colpastnewline =>	c = c.mvlineend(1);
+	* =>
+		if(colmv < 0)
+			raise "bad colmv";
+	}
+	return c;
 }
 
 # move to column on current line, moving to end if col is past end of line
@@ -211,7 +232,20 @@ Cursor.mvpos(cc: self ref Cursor, p: Pos): ref Cursor
 
 Cursor.mvlineend(c: self ref Cursor, nl: int): ref Cursor
 {
-	return c.mvcol(c.linelength(nl));
+	c = c.clone();
+	x := c.char();
+	while(x >= 0 && x != '\n')
+		x = c.next();
+	if(nl && x == '\n')
+		c.next();
+	return c;
+}
+
+Cursor.cmp(a, b: ref Cursor): int
+{
+	if(a.o == b.o) return 0;
+	if(a.o < b.o) return -1;
+	return 1;
 }
 
 Cursor.order(a, b: ref Cursor): (ref Cursor, ref Cursor)
@@ -221,7 +255,7 @@ Cursor.order(a, b: ref Cursor): (ref Cursor, ref Cursor)
 	return (a, b);
 }
 
-# return length of line, including newline if present if nl is set
+# return length of line, including newline if present and nl is set
 Cursor.linelength(cc: self ref Cursor, nl: int): int
 {
 	if(nl)
@@ -239,8 +273,8 @@ Cursor.linelength(cc: self ref Cursor, nl: int): int
 }
 
 whitespace: con " \t\n";
-interpunction: con "!\"#$%&'()*+,./:;<=>?@\\]^_`{|}~-";
-whitespaceinterpunction: con " \t\n!\"#$%&'()*+,./:;<=>?@\\]^_`{|}~-";
+interpunction: con "!\"#$%&'()*+,./:;<=>?@\\]^_`{|}~-[";
+whitespaceinterpunction: con " \t\n!\"#$%&'()*+,./:;<=>?@\\]^_`{|}~-[";
 Cursor.mvword(cc: self ref Cursor, capital: int, n: int): ref Cursor
 {
 	c := cc.clone();
@@ -273,8 +307,9 @@ mvwordbackward(c: ref Cursor, cap: int)
 {
 	c.prev();
 	x: int;
-	while((x = c.char()) >= 0 && str->in(x, whitespace))
-		c.prev();
+	x = c.char();
+	while(x >= 0 && str->in(x, whitespace))
+		x = c.prev();
 	if(cap) {
 		# read back until whitespace
 		c.prev();
@@ -285,7 +320,7 @@ mvwordbackward(c: ref Cursor, cap: int)
 		# otherwise read to end of last whitespace/interpunction
 		x = c.char();
 		if(x < 0) {
-			# xxx valid?!
+			# nothing
 		} else if(str->in(x, interpunction)) {
 			while((x = c.charprev()) >= 0 && str->in(x, interpunction))
 				c.prev();
@@ -317,18 +352,18 @@ Cursor.mvwordend(cc: self ref Cursor, cap: int, n: int): ref Cursor
 	return c;
 }
 
-Cursor.skip(cc: self ref Cursor, cl: string): ref Cursor
+Cursor.mvbegin(c: self ref Cursor): ref Cursor
+{
+	return c.clone().mvcol(0).mvskip(" \t");
+}
+
+Cursor.mvskip(cc: self ref Cursor, cl: string): ref Cursor
 {
 	c := cc.clone();
 	x := c.char();
 	while(x >= 0 && str->in(x, cl))
 		x = c.next();
 	return c;
-}
-
-Cursor.skipws(c: self ref Cursor): ref Cursor
-{
-	return c.skip(whitespace);
 }
 
 # return start & end of word under cursor.  (nil, nil) if cursor not under a word.
@@ -341,8 +376,9 @@ Cursor.word(c: self ref Cursor): (ref Cursor, ref Cursor)
 	b := c.clone();
 	while((x = a.charprev()) > 0 && !str->in(x, whitespaceinterpunction))
 		a.prev();
-	while((x = b.char()) > 0 && !str->in(x, whitespaceinterpunction))
-		b.next();
+	x = b.char();
+	while(x > 0 && !str->in(x, whitespaceinterpunction))
+		x = b.next();
 	return (a, b);
 }
 
@@ -371,11 +407,36 @@ Cursor.findstr(c: self ref Cursor, s: string, rev: int): ref Cursor
 	c = c.clone();
 	x := c.char();
 	while(x > 0) {
-		if(s[0] == x && str->prefix(s, c.b.s[c.o:])) { # xxx should not access c.b.s
+		if(s[0] == x && str->prefix(s, c.b.s[c.o:])) {
 			say(sprint("findstr, have match, c %s", c.text()));
 			return c;
 		}
 		x = c.walk(rev);
+	}
+	return nil;
+}
+
+Cursor.findlinechar(c: self ref Cursor, x: int, rev: int): ref Cursor
+{
+	c = c.clone();
+	xx: int;
+	if(rev) {
+		if(c.pos.c == 0)
+			return nil;
+		xx = c.prev();
+		do {
+			if(xx == x)
+				return c;
+			xx = c.prev();
+		} while(c.pos.c >= 0);
+	} else {
+		if(c.char() == '\n')
+			return nil;
+		do {
+			xx = c.next();
+			if(xx == x)
+				return c;
+		} while(xx >= 0 && xx != '\n');
 	}
 	return nil;
 }
@@ -443,14 +504,15 @@ Buf.cursor(b: self ref Buf, o: int): ref Cursor
 Buf.pos(b: self ref Buf, pos: Pos): ref Cursor
 {
 	c := ref Cursor (b, 0, Pos (1, 0));
-	while(c.pos.l < pos.l || (c.pos.l == pos.l && c.pos.c < pos.c)) {
-		x := c.next();
-		if(x < 0 || c.pos.l == pos.l && x == '\n') {
-			if(x < 0)
-				c.prev();
+
+	x := c.char();
+	for(;;) {
+		if(x < 0 || c.pos.l == pos.l && (x == '\n' || c.pos.c == pos.c))
 			break;
-		}
+		x = c.next();
 	}
+
+	say(sprint("Buf.pos %s -> %s", pos.text(), c.pos.text()));
 	return c;
 }
 
@@ -475,9 +537,13 @@ Buf.end(b: self ref Buf): ref Cursor
 	return b.cursor(max(0, b.chars()));
 }
 
-bufwritefd(b: ref Buf, fd: ref Sys->FD): string
+# if cs/ce is nil, write whole buf
+bufwritefd(b: ref Buf, cs, ce: ref Cursor, fd: ref Sys->FD): string
 {
-	buf := array of byte b.s;
+	if(cs == nil)
+		buf := array of byte b.s;
+	else
+		buf = array of byte text.get(cs, ce);
 	if(sys->write(fd, buf, len buf) != len buf)
 		return "write failed: %r";
 	return nil;
