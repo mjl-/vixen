@@ -419,7 +419,7 @@ Cursor.findstr(c: self ref Cursor, s: string, rev: int): ref Cursor
 	x := c.char();
 	while(x > 0) {
 		if(s[0] == x && str->prefix(s, c.b.s[c.o:])) {
-			say(sprint("findstr, have match, c %s", c.text()));
+			say('c', sprint("findstr, have match, c %s", c.text()));
 			return c;
 		}
 		x = c.walk(rev);
@@ -525,7 +525,7 @@ Buf.pos(b: self ref Buf, pos: Pos): ref Cursor
 		x = c.next();
 	}
 
-	say(sprint("Buf.pos %s -> %s", pos.text(), c.pos.text()));
+	say('c', sprint("Buf.pos %s -> %s", pos.text(), c.pos.text()));
 	return c;
 }
 

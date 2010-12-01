@@ -62,12 +62,19 @@ exnorange(c: ref Cursor)
 		exerror("illegal range");
 }
 
+optget(c: ref Cmd, x: int): int
+{
+	if(c.char() != x)
+		return 0;
+	c.get();
+	return 1;
+}
+
 # interpret remainder of Cmd as filename or filter, read/execute it and return result
 exreadarg(c: ref Cmd): string
 {
 	exreadsep(c, SepOptional);
-	filt := c.char() == '!';
-	if(filt) c.get();
+	filt := optget(c, '!');
 	exreadsep(c, SepOptional);
 
 	cmd := exrem(c, RemNonempty);
@@ -78,14 +85,6 @@ exreadarg(c: ref Cmd): string
 	if(err != nil)
 		exerror(err);
 	return res;
-}
-
-optget(c: ref Cmd, x: int): int
-{
-	if(c.char() != x)
-		return 0;
-	c.get();
-	return 1;
 }
 
 ex0(excmd: string, dot: ref Cursor): string
@@ -109,23 +108,25 @@ ex0(excmd: string, dot: ref Cursor): string
 		# :addr!command		replace line with output from command (that gets the original line as input)
 		# :addr,addr!command	replace lines ...
 		cmd := c.rem();
-		say(sprint("! on %q", cmd));
+		say('x', sprint("! on %q", cmd));
 		if(cs == nil) {
-			run(cmd);
+			err = sh->system(drawcontext, cmd);
+			if(err != nil)
+				return "error: "+err;
 		} else {
 			if(ce == nil) {
 				cs = cs.mvcol(0);
 				ce = cs.mvline(1, Colstart);
 			}
 			txt := text.get(cs, ce);
-			say(sprint("input is: %q", txt));
+			say('x', sprint("input is: %q", txt));
 			res: string;
 			(res, err) = filter(cmd, txt);
 			if(err != nil) {
 				statuswarn("error: "+err);
 				res = err;
 			}
-			say("result is: "+res);
+			say('x', "result is: "+res);
 			textdel(Cchange|Csetcursorlo, cs, ce);
 			textins(Cchange, nil, res);
 		}
@@ -146,10 +147,8 @@ ex0(excmd: string, dot: ref Cursor): string
 			(dst, err) = patternget(c, sep);
 		if(err != nil)
 			return "missing parameters";
-		g := c.char() == 'g';
-		if(g) c.get();
-		if(c.more())
-			return "trailing characters";
+		g := optget(c, 'g');
+		exempty(c);
 		err = substitute(cs, ce, src, dst, g);
 		if(err != nil)
 			return err;
@@ -158,7 +157,7 @@ ex0(excmd: string, dot: ref Cursor): string
 			cs = dot.mvlineend(1);
 		if(ce != nil)
 			cs = ce.mvlineend(1);
-		
+
 		res := exreadarg(c);
 		textins(Cchange|Csetcursorhi, cs, res);
 	'w' or
@@ -262,14 +261,17 @@ ex0(excmd: string, dot: ref Cursor): string
 		case exgetc(c) {
 		'u' =>
 			# put, register optional
+			r := register;
 			if(c.more()) {
 				exreadsep(c, SepRequired);
-				r := exgetc(c);
+				r = exgetc(c);
 				exempty(c);
-				xregcanput(r);
-				register = r;
 			}
-			textins(Cchange|Csetcursorlo, csdef.mvlineend(1), registers[register]);
+			s: string;
+			(s, err) = regget(r);
+			if(err != nil)
+				exerror(err);
+			textins(Cchange|Csetcursorlo, csdef.mvlineend(1), s);
 		* =>
 			exerror(sprint("bad ex command: %q", excmd));
 		}
@@ -286,12 +288,12 @@ ex0(excmd: string, dot: ref Cursor): string
 			exerror(err);
 		dst = dst.mvcol(0);
 		s := text.get(csdef, cedef);
-		say(sprint("move, dst %s, csdef %s, cedef %s", dst.text(), csdef.text(), cedef.text()));
+		say('x', sprint("move, dst %s, csdef %s, cedef %s", dst.text(), csdef.text(), cedef.text()));
 		if(Cursor.cmp(dst, csdef) < 0) {
 			textdel(Cchange, csdef, cedef);
 			textins(Cchange|Csetcursorlo, dst, s);
 		} else if(Cursor.cmp(dst, cedef) >= 0) {
-			say(sprint("dst is %s, mvlineend(1) %s", dst.text(), dst.mvlineend(1).text()));
+			say('x', sprint("dst is %s, mvlineend(1) %s", dst.text(), dst.mvlineend(1).text()));
 			textins(Cchange, dst.mvlineend(1), s);
 			textdel(Cchange, csdef, cedef);
 			cursorset(dst);
@@ -430,7 +432,7 @@ Address:
 			dot = cs;
 		'\'' =>
 			if(!c.more())
-				return (nil, "incomplete register address");
+				return (nil, "incomplete mark address");
 			x = c.get();
 			err: string;
 			(dot, err) = markget(x);

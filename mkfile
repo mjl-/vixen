@@ -2,6 +2,6 @@
 
 DIRS=\
 	appl\
-#	man\
+	man\
 
 <$ROOT/mkfiles/mksubdirs

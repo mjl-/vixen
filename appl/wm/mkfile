@@ -9,6 +9,8 @@ MODULES=\
 	vixen/cmd.b\
 	vixen/ex.b\
 	vixen/filter.b\
+	vixen/interp.b\
+	vixen/misc.b\
 	vixen/subs.b\
 
 SYSMODULES=\
