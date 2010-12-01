@@ -7,6 +7,7 @@ MODULES=\
 	vixen/buffers.b\
 	vixen/change.b\
 	vixen/cmd.b\
+	vixen/ex.b\
 	vixen/filter.b\
 	vixen/subs.b\
 

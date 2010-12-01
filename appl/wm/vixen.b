@@ -26,11 +26,12 @@ include "sh.m";
 	sh: Sh;
 include "util0.m";
 	util: Util0;
-	fail, warn, pid, kill, killgrp, min, max, l2a, rev: import util;
+	fail, warn, pid, kill, killgrp, min, max, abs, l2a, rev: import util;
 
 include "vixen/buffers.b";
 include "vixen/change.b";
 include "vixen/cmd.b";
+include "vixen/ex.b";
 include "vixen/filter.b";
 include "vixen/subs.b";
 
@@ -40,19 +41,18 @@ Vixen: module {
 
 
 dflag := 1;  # debug
-startupcmd: string;  # command to interpret at startup after opening the file
+startupmacro: string;  # macro to interpret at startup after opening the file
 
 Insert, Replace, Command0, Visual, Visualline: con iota;  # modes
 modes := array[] of {"insert", "replace", "command", "visual", "visual line"};
 
-# whether to record the change for undo.
-# Cmod restricts to current modifiction in current change.
-# the repl-variants are for replace mode.
-Cnone, Cmod, Cmodrepl, Cchange, Cchangerepl, Csetcursor0, Csetcursor1: con 1<<iota;
-Cmask: con Csetcursor0-1;
 
-# whether to set cursor after text insert/delete
-
+# parameter "rec" to textdel & textins.
+Cnone, Cmod, Cmodrepl, Cchange, Cchangerepl,	# how to record as change, for undo
+Csetcursorlo, Csetcursorhi,			# where (if) to set cursor
+Csetreg: con 1<<iota;				# whether to set "last change" register
+Cchangemask: con Csetcursorlo-1;
+Csetcursormask: con Csetcursorlo|Csetcursorhi;
 
 mode: int;
 visualstart: ref Cursor;  # start of visual select, non-nil when mode == Visual or Visualline
@@ -60,12 +60,12 @@ cmdcur: ref Cmd;  # current command
 cmdprev: ref Cmd;  # previous (completed) command, for '.'
 recordreg := -1;  # register currently recording to, < 0 when not recording
 record: string;  # chars typed while recording, set to register when done
-editpre: string;  # one char, prefix of edit entry
-editempty: int;  # whether edit entry was empty after its last key event
 colsnap := -1;  # column to snap vertical movements to.  only valid >= 0
 
 filename: string;  # may be nil initially
 filefd: ref Sys->FD;  # may be nil initially
+filestat: Sys->Dir;  # stat after previous read or write, to check before writing.  only valid if filefd not nil.
+
 modified: int;  # whether text has unsaved changes
 text: ref Buf;  # contents
 cursor: ref Cursor;  # current position in text
@@ -74,6 +74,11 @@ statustext: string;  # info/warning/error text to display in status bar
 
 searchregex: Regex->Re;  # current search
 searchreverse: int;  # whether search is in reverse
+
+lastfind: int;  # last find command, one of tTfF, for ';' and ','
+lastfindchar: int;  # parameter to lastfind
+
+lastmacro: int; # last macro execution, for '@@'
 
 edithist: list of string;  # history of edit commands, hd is last typed
 edithistcur := -1;  # currently selected history item, -1 when none
@@ -87,19 +92,22 @@ change: ref Change;  # current change (with 1 modification) that is being create
 changes: array of ref Change;  # change history, for undo.  first elem is oldest change.
 changeindex: int;  # points to next new/last undone change.  may be one past end of 'changes'.
 
-marks := array[128] of ref Pos;
+marks := array[128] of ref Cursor;
 registers := array[128] of string;
-register: int;
+register := '"';  # register to write next text deletion to
 
 b3start: ref Pos; # start of button3 press
 b3prev: ref Pos;  # previous position while button3 down
+
+statusvisible := 1;  # whether tk frame with status label is visible (and edit entry is not)
 
 plumbed: int;
 top: ref Tk->Toplevel;
 wmctl: chan of string;
 drawcontext: ref Draw->Context;
 
-Normal, Green: con iota;  # text selection color scheme.  Green for plumbing.
+# text selection color scheme.  Green for plumbing.
+Normal, Green: con iota;
 
 tkcmds0 := array[] of {
 "frame .t",
@@ -108,7 +116,6 @@ tkcmds0 := array[] of {
 "frame .s",
 "label .s.status -text status",
 "frame .e",
-"label .e.char -text { }",
 "entry .e.edit",
 
 "bind .e.edit <Key-\n> {send edit return}",
@@ -128,11 +135,10 @@ tkcmds0 := array[] of {
 "pack .t -fill both -expand 1",
 
 "pack .s.status -fill x -side left",
-"pack .s -fill x",
+"pack .s -fill x -side bottom -after .t",
 
-"pack .e.char -side left",
-"pack .e.edit -fill x -expand 1 -side right",
-"pack .e -fill x -side bottom",
+"pack .e.edit -fill x -expand 1 -side left",
+#"pack .e -fill x -side bottom -after .t",
 
 "pack propagate . 0",
 ". configure -width 700 -height 500",
@@ -163,7 +169,7 @@ tkbinds()
 	for(i = 0; i < len binds; i++)
 		tkcmd(sprint("bind .t.text <Key-\\%c> {send key %%K}", binds[i]));
 
-	binds = array[] of {'h', 'w', 'u', 'f', 'b', 'd', 'y', 'e', 'l', 'g', 'r'};
+	binds = array[] of {'h', 'w', 'u', 'f', 'b', 'd', 'y', 'e', 'l', 'g', 'r', 'n', 'p'};
 	for(i = 0; i < len binds; i++)
 		tkcmd(sprint("bind .t.text <Control-\\%c> {send key %x}", binds[i], kb->APP|binds[i]));
 }
@@ -189,10 +195,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	util->init();
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-d] [-c cmd] [filename]");
+	arg->setusage(arg->progname()+" [-d] [-c macro] [filename]");
 	while((c := arg->opt()) != 0)
 		case c {
-		'c' =>	startupcmd = arg->arg();
+		'c' =>	startupmacro = arg->arg();
 		'd' =>	dflag++;
 		* =>	arg->usage();
 		}
@@ -211,11 +217,17 @@ init(ctxt: ref Draw->Context, args: list of string)
 		filefd = sys->open(filename, Sys->ORDWR);
 		if(filefd == nil)
 			openerr = sprint("%r");
+		else {
+			ok: int;
+			(ok, filestat) = sys->fstat(filefd);
+			if(ok < 0)
+				openerr = sprint("stat: %r");
+		}
 		# if filefd is nil, we warn that this is a new file when tk is initialized
 	}
 	text = text.new();
 	cursor = text.pos(Pos(1, 0));
-	marks['`'] = marks['\''] = ref cursor.pos;
+	xmarkput('`', cursor);
 	cmdcur = Cmd.new();
 
 	tkclient->init();
@@ -244,8 +256,8 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	modeset(Command0);
 
-	if(startupcmd != nil) {
-		cmdcur = Cmd.mk(startupcmd);
+	if(startupmacro != nil) {
+		cmdcur = Cmd.mk(startupmacro);
 		interpx();
 	}
 
@@ -370,28 +382,17 @@ editinput(e: string)
 	case e {
 	"return" =>
 		s := tkcmd(".e.edit get");
+		if(s == nil)
+			raise "empty string from entry";
 		say(sprint("edit command: %q", s));
+		s = s[1:];  # first char has already been read
 		tkcmd(".e.edit delete 0 end");
-		edithistput(editpre+s);
+		edithistput(s);
 		for(i := 0; i < len s; i++)
 			key(s[i]);
 		key('\n');
 		interpx();
-		tkcmd(".e.char configure -text { }");
 		tkcmd("focus .t.text");
-		editpre = nil;
-	"^h" or
-	"esc" =>
-		if(e == "^h" && !editempty)
-			break;
-		tkcmd(".e.edit delete 0 end");
-		edithistcur = -1;
-		edithisttext = nil;
-		editpre = nil;
-		tkcmd(".e.char configure -text { }");
-		tkcmd("focus .t.text");
-		key(kb->Esc);
-		interpx();
 	"tab" =>
 		Completebreak: con " \t!\"\'#$%&'()*+,:;<=>?@\\]^_`{|}~";
 		s := tkcmd(".e.edit get");
@@ -430,12 +431,22 @@ editinput(e: string)
 		for(i := 0; i < len a; i++)
 			say(sprint("%3d %s", i, a[i]));
 		editnavigate(e == "up");
+	"esc" =>
+		editesc();
 	* =>
 		if(str->prefix("press ", e)) {
-			editempty = tkcmd(".e.edit get") == nil;
 			(x, rem) := str->toint(e[len "press ":], 16);
 			if(rem != nil)
 				return warn(sprint("bad edit press %q", e));
+
+			# key presses are interpreted by tk widget first, then sent here.
+			# on e.g. ^h of last char, we see an empty string in the entry, so we abort.
+			editempty := tkcmd(".e.edit get") == nil;
+			if(editempty) {
+				editesc();
+				break;
+			}
+
 			# we get up/down and other specials too, they don't change the text
 			if((x & kb->Spec) != kb->Spec && x != '\t') {
 				edithistcur = -1;
@@ -445,6 +456,16 @@ editinput(e: string)
 		} else
 			warn(sprint("unhandled edit command %q", e));
 	}
+}
+
+editesc()
+{
+	tkcmd(".e.edit delete 0 end");
+	edithistcur = -1;
+	edithisttext = nil;
+	tkcmd("focus .t.text");
+	key(kb->Esc);
+	interpx();
 }
 
 interp(cc: ref Cmd)
@@ -477,20 +498,23 @@ Interp:
 				statuswarn(ex);
 			cmdcur = Cmd.new();
 			modeset(Command0);
+			register = '"';
 			break Interp;
 		"consumed:*" =>
 			# characters consumed, nothing special to do
 			cmdcur = cc;
 		"change:*" =>
 			# a changing command finished.  store to cmdprev for repeat.
-			changesave();
 			cmdprev = Cmd.mk(cmdcur.str());
 			cmdcur = Cmd.new();
 			modeset(Command0);  # calls statusset
-		"done:*" =>
+			register = '"';
 			changesave();
+		"done:*" =>
 			cmdcur = Cmd.new();
 			statusset();
+			register = '"';
+			changesave();
 		"moveonly:*" =>
 			# command that was move-only (don't store as cmdprev)
 			cmdcur = Cmd.new();
@@ -591,9 +615,7 @@ redo()
 editset0(index: int, s: string)
 {
 	edithistcur = index;
-	editpre = s[:1];
-	editempty = len s == 1;
-	tkcmd(sprint(".e.char configure -text {%c}; focus .e.edit; .e.edit delete 0 end; .e.edit insert 0 '%s", s[0], s[1:]));
+	tkcmd(sprint("focus .e.edit; .e.edit delete 0 end; .e.edit insert 0 '%s", s));
 }
 
 editset(s: string)
@@ -604,7 +626,7 @@ editset(s: string)
 editnavigate(up: int)
 {
 	if(edithisttext == nil)
-		edithisttext = editpre+tkcmd(".e.edit get");
+		edithisttext = tkcmd(".e.edit get");
 	a := l2a(rev(edithist));
 	if(up) {
 		for(i := edithistcur+1; i < len a; ++i)
@@ -721,236 +743,38 @@ search(rev, srev: int, re: Regex->Re, cr: ref Cursor): ref Cursor
 	return text.cursor(newo);
 }
 
-# read & evaluate an address.
-address(c: ref Cmd): (ref Cursor, string)
+Beep: adt {
+	beeped:	int;
+	base:	ref Cursor;
+	dst:	ref Cursor;
+
+	mk:	fn(base: ref Cursor): ref Beep;
+	set:	fn(b: self ref Beep, c: ref Cursor);
+	beepset:	fn(b: self ref Beep, c: ref Cursor);
+};
+
+Beep.mk(base: ref Cursor): ref Beep
 {
-	if(!c.more())
-		return (nil, nil);
-	case x := c.get() {
-	'.' =>	return (cursor, nil);
-	'$' =>	return (text.pos(Pos (text.lines(), 0)), nil);
-	'0' to '9' =>
-		return (text.pos(Pos (int c.getnum(), 0)), nil);
-	'+' or
-	'-' =>
-		mult := 1;
-		if(x == '-')
-			mult = -1;
-		return (cursor.mvline(mult*int c.getnum(), Colkeep), nil);
-	'/' or
-	'?' =>
-		(pat, err) := patternget(c, x);
-		if(err != nil)
-			return (nil, "bad pattern: "+err);
-		re: Regex->Re;
-		(re, err) = regex->compile(pat, 0);
-		if(err != nil)
-			return (nil, "bad regex: "+err);
-		cs := search(x == '?', 0, re, cursor);
-		if(cs == nil)
-			return (nil, sprint("pattern %q not found", pat));
-		return (cs, nil);
-	'\'' =>
-		if(!c.more())
-			return (nil, "incomplete register address");
-		x = c.get();
-		(pos, err) := markget(x);
-		if(err != nil)
-			return (nil, err);
-		return (text.pos(*pos), nil);
-	}
-	c.unget();
-	return (nil, nil);
+	return ref Beep (0, base.clone(), base);
 }
 
-range(c: ref Cmd): (ref Cursor, ref Cursor, string)
+Beep.set(b: self ref Beep, c: ref Cursor)
 {
-	if(!c.more())
-		return (nil, nil, nil);
-	case c.get() {
-	'%' =>	return (text.cursor(0), text.end(), nil);
-	'*' =>	return (nil, nil, "range '*' not implemented");
-	}
-	c.unget();
-	(cs, err) := address(c);
-	ce: ref Cursor;
-	if(err == nil && cs != nil && c.char() == ',') {
-		c.get();
-		(ce, err) = address(c);
-	}
-	return (cs, ce, err);
+	*b.dst = *c;
 }
 
-
-patternget(c: ref Cmd, sep: int): (string, string)
+Beep.beepset(b: self ref Beep, c: ref Cursor)
 {
-	s := "";
-	while(c.more()) {
-		x := c.get();
-		if(x == sep)
-			return (s, nil);
-		if(x == '\\' && c.char() == sep)
-			x = c.get();
-		s[len s] = x;
-	}
-	return (nil, "missing ending separator");
+	if(c == nil || Cursor.cmp(b.base, c) == 0)
+		b.beeped++;
+	else
+		b.set(c);
 }
 
-edit(s: string)
-{
-	if(s == nil)
-		return;
-
-	c := Cmd.mk(s);
-	(cs, ce, err) := range(c);
-	if(err != nil)
-		return statuswarn("bad range: "+err);
-	if(!c.more())
-		return statuswarn("missing command");
-
-	case c.get() {
-	'!' =>
-		# :!command		run command
-		# :addr!command		replace line with output from command (that gets the original line as input)
-		# :addr,addr!command	replace lines ...
-		cmd := c.rem();
-		say(sprint("! on %q", cmd));
-		if(cs == nil) {
-			run(cmd);
-		} else {
-			if(ce == nil) {
-				cs = cs.mvcol(0);
-				ce = cs.mvline(1, Colstart);
-			}
-			txt := text.get(cs, ce);
-			say(sprint("input is: %q", txt));
-			res: string;
-			(res, err) = filter(cmd, txt);
-			if(err != nil) {
-				statuswarn("error: "+err);
-				res = err;
-			}
-			say("result is: "+res);
-			textdel(Cchange|Csetcursor0, cs, ce);
-			textins(Cchange, nil, res);
-		}
-	's' =>
-		# if no range, then current line (cursor) only.
-		# if 1 address, only that line.
-		# otherwise, substitute in that range
-		if(cs == nil)
-			cs = cursor;
-		if(ce == nil) {
-			cs = cs.mvcol(0);
-			ce = cs.mvlineend(1);
-		}
-		if(!c.more())
-			return statuswarn("missing parameters");
-		sep := c.get();
-		src, dst: string;
-		(src, err) = patternget(c, sep);
-		if(err == nil)
-			(dst, err) = patternget(c, sep);
-		if(err != nil)
-			return statuswarn("missing parameters");
-		g := c.char() == 'g';
-		if(g) c.get();
-		if(c.more())
-			return statuswarn("trailing characters");
-		err = substitute(cs, ce, src, dst, g);
-		if(err != nil)
-			return statuswarn(err);
-	'r' =>
-		if(cs == nil)
-			cs = cursor.mvlineend(1);
-		if(ce != nil)
-			cs = ce.mvlineend(1);
-		
-		filt := c.char() == '!';
-		if(filt) c.get();
-
-		while(c.more() && str->in(c.char(), whitespace))
-			c.get();
-		if(!c.more())
-			return statuswarn("missing argument");
-
-		cmd := c.rem();
-		res: string;
-		if(filt)
-			(res, err) = filter(cmd, "");
-		else
-			(res, err) = readfile(cmd);
-		if(err != nil)
-			return statuswarn(err);
-		textins(Cchange|Csetcursor1, cs, res);
-	'w' or
-	'q' =>
-		if(cs != nil && ce == nil)
-			ce = cs.mvlineend(1);
-		c.unget();
-		w := c.char() == 'w';
-		if(w) c.get();
-		q := c.char() == 'q';
-		if(q) c.get();
-		force := c.char() == '!';
-		if(force) c.get();
-
-		if(q && cs != nil)
-			return statuswarn("range not allowed");
-
-		ofilename: string;
-		if(c.more() && (!w || c.char() != '/' && !str->in(c.char(), whitespace)))
-			return statuswarn("trailing characters");
-		while(c.more() && str->in(c.char(), whitespace))
-			c.get();
-		if(c.more()) {
-			ofilename = c.rem();
-			if(filename == nil)
-				filename = ofilename;
-		} else
-			ofilename = filename;
-
-		err: string;
-		if(w) {
-			err = textwrite(force, ofilename, cs, ce);
-			if(err != nil)
-				statuswarn(err);
-			else {
-				statuswarn("written");
-				if(cs == nil)
-					modified = 0;
-			}
-		}
-		if(q) {
-			if(err == nil && (!modified || force))
-				quit();
-			if(err == nil)
-				statuswarn("unsaved changes, use :q!");
-		}
-	'x' =>
-		force := c.char() == '!';
-		if(force) c.get();
-		if(c.more())
-			return statuswarn("trailing characters");
-		writemodifiedquit(force);
-	* =>
-		warn(sprint("unhandled edit command: %q", s));
-	}
-}
-
-# beep if a & b are the same location, return b
-
-beep(a, b: ref Cursor): ref Cursor
-{
-	if(Cursor.cmp(a, b) == 0)
-		statuswarn("beep!");
-	return b;
-}
-
-move(cc: ref Cmd, mult: int, cr: ref Cursor): int
+Nosetjump, Setjump: con iota;
+move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 {
 	say("move: "+cc.text());
-	co := cr.clone();  # used in calls to beep
 	c := cc.clone();
 	numstr := c.xgetnum();
 	num := 1;
@@ -958,64 +782,91 @@ move(cc: ref Cmd, mult: int, cr: ref Cursor): int
 		num = int numstr;
 	num *= mult;
 
+	b := Beep.mk(cr);
+
 	jump := 0;
 	newcolsnap := 1;
 
 	case x := c.xget() {
 	kb->Home or
-	'0' =>	*cr = *cr.mvcol(0);
+	'0' =>	b.set(cr.mvcol(0));
 	kb->Left or
-	'h' =>	*cr = *beep(co, cr.mvchar(-num));
+	'h' =>	b.beepset(cr.mvchar(-num));
 	kb->Right or
-	'l' =>	*cr = *beep(co, cr.mvchar(+num));
-	'w' =>	*cr = *beep(co, cr.mvword(0, +num));
-	'W' =>	*cr = *beep(co, cr.mvword(1, +num));
-	'b' =>	*cr = *beep(co, cr.mvword(0, -num));
-	'B' =>	*cr = *beep(co, cr.mvword(1, -num));
-	'e' =>	*cr = *beep(co, cr.mvwordend(0, +num));
-	'E' =>	*cr = *beep(co, cr.mvwordend(1, +num));
+	'l' =>	b.beepset(cr.mvchar(+num));
+	' ' =>
+		nc := cr.clone();
+		nc.next();
+		b.beepset(nc);
+	'w' =>	b.beepset(cr.mvword(0, +num));
+	'W' =>	b.beepset(cr.mvword(1, +num));
+	'b' =>	b.beepset(cr.mvword(0, -num));
+	'B' =>	b.beepset(cr.mvword(1, -num));
+	'e' =>	b.beepset(cr.mvwordend(0, +num));
+	'E' =>	b.beepset(cr.mvwordend(1, +num));
 	'G' =>	
 		if(numstr == nil)
-			*cr = *text.end();
+			b.set(text.end());
 		else
-			*cr = *text.pos(Pos (num, 0)).mvbegin();
+			b.set(text.pos(Pos (num, 0)).mvfirst());
 		jump = 1;
 	kb->End or
-	'$' =>	*cr = *cr.mvlineend(0);
-	'^' =>	*cr = *beep(co, cr.mvbegin());
-	'-' =>	*cr = *beep(co, cr.mvline(-1, Colfirstnonblank));
-	'+' =>	*cr = *beep(co, cr.mvline(+1, Colfirstnonblank));
+	'$' =>	b.set(cr.mvline(+num-1, Colend));
+	'^' =>	b.set(cr.mvfirst());
+	'-' =>	b.set(cr.mvline(-num, Colfirstnonblank));
+	'+' or
+	'\n' =>	b.beepset(cr.mvline(+num, Colfirstnonblank));
+	'_' =>	b.beepset(cr.mvline(num-1, Colfirstnonblank));
 	'f' or
 	'F' or
 	't' or
-	'T' =>
-		xx := c.xget();
+	'T' or
+	';' or
+	',' =>
+		if((x == ';' || x == ',') && lastfind == 0)
+			xabort("no previous find");
+		y: int;
+		case x {
+		';' =>
+			x = lastfind;
+			y = lastfindchar;
+		',' =>
+			x = swapcasex(lastfind);
+			y = lastfindchar;
+		* =>
+			y = c.xget();
+			lastfind = x;
+			lastfindchar = y;
+		}
 		rev := x == 'F' || x == 'T';
-		nc := cr.findlinechar(xx, rev);
-		if(nc == nil)
-			xabort("not found");
+		nc := cr;
+		while(num--) {
+			nc = nc.findlinechar(y, rev);
+			if(nc == nil)
+				xabort("not found");
+		}
 		if(x == 't' && nc.pos.c > 0)
 			nc.prev();
 		if(x == 'T' && nc.char() != '\n')
 			nc.next();
-		*cr = *beep(co, nc);
+		b.beepset(nc);
 	'n' or
 	'N' =>
 		rev := x == 'N';
 		while(num--) {
-			nc := search(rev, searchreverse, searchregex, cr);
+			nc := search(rev, searchreverse, searchregex, b.dst);
+			b.beepset(nc);
 			if(nc == nil)
 				break;
-			*cr = *nc;
 		}
 		jump = 1;
 	'*' or
 	'#' =>	
-		(a, b) := cursor.word();
-		if(a == nil)
+		(ws, we) := cursor.word();
+		if(ws == nil)
 			xabort("no word under cursor");
 		rev := x == '#';
-		ss := text.get(a, b);
+		ss := text.get(ws, we);
 		#Wordbreak: con "\\;\\]\\;\\-\\.\\^\\$\\(\\)\\*\\+\\?\\|\\[\\\\ \t!\"#%&',/:;<=>@\\^_`{|}~\\[";
 		#Wordbreak: con " \t";
 		#restr := sprint("(^|[%s])%s($|[%s])", Wordbreak, ss, Wordbreak);
@@ -1024,12 +875,12 @@ move(cc: ref Cmd, mult: int, cr: ref Cursor): int
 		if(err != nil)
 			xabort("bad pattern (internal error)");
 		if(rev)
-			*cr = *a;
+			b.beepset(ws);
 		while(num--) {
-			nc := search(rev, 0, re, cr);
+			nc := search(rev, 0, re, b.dst);
+			b.beepset(nc);
 			if(nc == nil)
 				break;
-			*cr = *nc;
 		}
 		jump = 1;
 	'%' =>
@@ -1037,87 +888,96 @@ move(cc: ref Cmd, mult: int, cr: ref Cursor): int
 			# move to percentage of file, in lines
 			perc := int numstr;
 			if(perc > 0 && perc <= 100)
-				*cr = *text.pos(Pos (perc*text.lines()/100, 0));
+				b.beepset(text.pos(Pos (perc*text.lines()/100, 0)));
 			else
-				beep(cr, cr);
+				b.beepset(nil);
 		} else {
 			# move to matching (){}[].  if other char under cursor, search forward for one.
-			say(sprint("%% match, c %c (%d)", cr.char(), cr.char()));
 			if(cr.char() < 0)
 				break;
-			nc := cr.clone();
+			nc := b.dst.clone();
 			if(!str->in(nc.char(), "(){}[]"))
 				nc = nc.findchar("(){}[]", 0);
-			if(nc != nil)
-				case nc.char() {
-				'(' =>	nc = nc.findchar(")", 0);
-				')' =>	nc = nc.findchar("(", 1);
-				'[' =>	nc = nc.findchar("]", 0);
-				']' =>	nc = nc.findchar("[", 1);
-				'{' =>	nc = nc.findchar("}", 0);
-				'}' =>	nc = nc.findchar("{", 1);
+			if(nc != nil) {
+				sep: string;
+				case look := nc.char() {
+				'(' or ')' =>	sep = "()";
+				'{' or '}' =>	sep = "{}";
+				'[' or ']' =>	sep = "[]";
 				}
-			if(nc != nil)
-				*cr = *beep(co, nc);
-			else
-				beep(cr, cr);
+				rev := nc.char() == sep[1];
+				level := 1;
+				nc.walk(rev);
+				for(;;) {
+					nc = nc.findchar(sep, rev);
+					if(nc == nil)
+						break;
+					if(nc.char() != look)
+						--level;
+					else
+						++level;
+					if(level <= 0)
+						break;
+					nc.walk(rev);
+				}
+			}
+			b.beepset(nc);
 		}
 		jump = 1;
 	'|' =>
 		n := 0;
 		if(numstr != nil)
 			n = int numstr;
-		*cr = *cr.mvcol(n*mult);
+		b.set(cr.mvcol(n*mult));
 	'(' =>
 		# beginning of previous sentence
-		Lineend: con ".!?:";
+		Lineend: con ".!?";
 		nc := cr.clone();
-		xx := nc.prev();
-		while(xx >= 0 && (str->in(xx, Lineend) || str->in(xx, whitespace)))
-			xx = nc.prev();
+		y := nc.prev();
+		while(y >= 0 && (str->in(y, Lineend) || str->in(y, whitespace)))
+			y = nc.prev();
 		nc = nc.findchar(Lineend, 1);
-		if(nc != nil) {
-			nc = nc.mvskip(Lineend+whitespace);
-			*cr = *nc;
-		} else
-			*cr = *text.cursor(0);
+		if(nc != nil)
+			b.set(nc.mvskip(Lineend+whitespace));
+		else
+			b.set(text.cursor(0));
 		jump = 1;
 	')' =>
-		Lineend: con ".!?:";
+		Lineend: con ".!?";
 		nc := cr.clone();
 		nc = nc.mvskip("^"+Lineend);
 		nc = nc.mvskip(Lineend+whitespace);
-		*cr = *nc;
+		b.set(nc);
 		jump = 1;
 	'{' => 
 		nc := cr.clone();
-		xx := nc.prev();
-		while(xx == '\n')
-			xx = nc.prev();
+		y := nc.prev();
+		while(y == '\n')
+			y = nc.prev();
 		nc = nc.findstr("\n\n", 1);
 		if(nc == nil)
 			nc = text.cursor(0);
 		else
 			nc.next();
-		*cr = *nc;
+		b.set(nc);
 		jump = 1;
 	'}' =>
 		nc := cr.clone();
-		xx := nc.char();
-		while(xx == '\n')
-			xx = nc.next();
+		y := nc.char();
+		while(y == '\n')
+			y = nc.next();
 		nc = nc.findstr("\n\n", 0);
 		if(nc == nil)
 			nc = text.end();
 		else
 			nc.next();
-		*cr = *nc;
+		b.set(nc);
 		jump = 1;
 	'`' =>
-		*cr = *text.pos(xmarkget(c.xget()));
+		b.set(xmarkget(c.xget()));
 		jump = 1;
 	'\'' =>
-		*cr = *text.pos(xmarkget(c.xget())).mvbegin();
+		b.set(xmarkget(c.xget()).mvfirst());
 		jump = 1;
 	'/' or
 	'?' =>
@@ -1125,46 +985,63 @@ move(cc: ref Cmd, mult: int, cr: ref Cursor): int
 		searchreverse = (x == '?');
 		if(s == nil || searchset(s)) {
 			nc := search(0, searchreverse, searchregex, cr);
+			b.set(nc);
 			if(nc == nil)
 				break;
-			*cr = *nc;
 		}
 		jump = 1;
 	'H' or
 	'M' or
 	'L' =>
-		(a, b) := tkvisible();
+		(ps, pe) := tkvisible();
 		l: int;
 		case x {
-		'H' =>	l = min(a.l+num-1, b.l);
-		'M' =>	l = (a.l+b.l)/2;
-		'L' =>	l = max(a.l, b.l-num+1);
+		'H' =>	l = min(ps.l+num-1, pe.l);
+		'M' =>	l = (ps.l+pe.l)/2;
+		'L' =>	l = max(ps.l, pe.l-num+1);
 		}
-		*cr = *cr.mvpos(Pos (l, 0)).mvbegin();
+		b.set(cr.mvpos(Pos (l, 0)).mvfirst());
+	'g' =>
+		case c.xget() {
+		'g' =>
+			if(numstr == nil)
+				b.set(text.pos(Pos(1, 0)));
+			else
+				b.set(text.pos(Pos (num, 0)).mvfirst());
+			jump = 1;
+		'o' =>
+			b.set(text.cursor(num-1));
+			jump = 1;
+		}
 	* =>
 		colkeep := Colkeep;
 		if(colsnap >= 0)
 			colkeep = colsnap;
 		case x {
+		kb->APP|'n' or
 		kb->Down or
-		'j' =>		*cr = *beep(co, cr.mvline(+num, colkeep));
+		'j' =>		b.beepset(cr.mvline(+num, colkeep));
+		kb->APP|'p' or
 		kb->Up or
-		'k' =>		*cr = *beep(co, cr.mvline(-num, colkeep));
+		'k' =>		b.beepset(cr.mvline(-num, colkeep));
 		kb->APP|'b' or
-		kb->Pgup =>	*cr = *beep(co, cr.mvline(-max(1, tklinesvisible()), colkeep));
+		kb->Pgup =>	b.beepset(cr.mvline(-max(1, tklinesvisible()), colkeep));
 		kb->APP|'f' or
-		kb->Pgdown =>	*cr = *beep(co, cr.mvline(+max(1, tklinesvisible()), colkeep));
-		kb->APP|'u' =>	*cr = *beep(co, cr.mvline(-max(1, tklinesvisible()/2), colkeep));
-		kb->APP|'d' =>	*cr = *beep(co, cr.mvline(+max(1, tklinesvisible()/2), colkeep));
+		kb->Pgdown =>	b.beepset(cr.mvline(+max(1, tklinesvisible()), colkeep));
+		kb->APP|'u' =>	b.beepset(cr.mvline(-max(1, tklinesvisible()/2), colkeep));
+		kb->APP|'d' =>	b.beepset(cr.mvline(+max(1, tklinesvisible()/2), colkeep));
 		* =>
-			xabort(sprint("unknown move %c", x));
+			xabort(sprint("bad command %c", x));
 		}
 		newcolsnap = 0;
 	}
 	if(newcolsnap)
-		colsnap = cr.pos.c;
+		colsnap = b.dst.pos.c;
 	*cc = *c;
-	return jump;
+	if(b.beeped)
+		statuswarn("beep!");
+	if(jump && setjump && !b.beeped)
+		xmarkput('`', b.base);
 }
 
 insert(c: ref Cmd, repl: int)
@@ -1175,13 +1052,18 @@ insert(c: ref Cmd, repl: int)
 		(cmod, cchange) = (Cmodrepl, Cchangerepl);
 	while(c.more())
 		case x := c.get() {
-		kb->Esc =>	xchange();
+		kb->Esc =>	
+				if(inserted())
+					cursorset(cursor.mvchar(-1));
+				xchange();
 		kb->APP|'h' or
-		kb->Del =>	textdel(cmod|Csetcursor0, cursor.mvchar(-1), nil);
-		kb->APP|'w' =>	textdel(cmod|Csetcursor0, cursor.mvword(0, -1), nil);
-		kb->APP|'u' =>	textdel(cmod|Csetcursor0, cursor.mvcol(0), nil);
+		kb->Del =>	textdel(cmod|Csetcursorlo, cursor.mvchar(-1), nil);
+		kb->APP|'w' =>	textdel(cmod|Csetcursorlo, cursor.mvword(0, -1), nil);
+		kb->APP|'u' =>	textdel(cmod|Csetcursorlo, cursor.mvcol(0), nil);
 		* =>
-			textins(cchange|Csetcursor1, nil, sprint("%c", x));
+			if(repl && x == '\n' || cursor.char() == '\n')
+				(cmod, cchange) = (Cmod, Cchange);
+			textins(cchange|Csetcursorhi, nil, sprint("%c", x));
 		}
 	xconsumed();
 }
@@ -1193,61 +1075,158 @@ xconsumed()		{ raise "consumed:"; }
 xchange()		{ raise "change:"; }
 xmoveonly()		{ raise "moveonly:"; }
 
-xneed(c: ref Cmd)
+markget(c: int): (ref Cursor, string)
 {
-	if(!c.more())
-		xmore();
-}
-
-xcheckmark(x: int)
-{
-	if(x >= len marks)
-		xabort(sprint("bad mark %c", x));
-}
-
-markget(x: int): (ref Pos, string)
-{
-	p: ref Pos;
-	case x {
+	m: ref Cursor;
+	case c {
+	'a' to 'z' or
+	'`' or
+	'\'' or
+	'.' or
+	'^' =>	m = marks[c];
 	'<' or
 	'>' =>
 		if(mode != Visual && mode != Visualline)
 			break;
-		(vs, ve) := Cursor.order(visualstart, cursor);
+		(vs, ve) := Cursor.order(visualstart.clone(), cursor.clone());
 		if(mode == Visualline)
 			ve = ve.mvlineend(1);
-		case x {
-		'<' =>	return (ref vs.pos, nil);
-		'>' =>	return (ref ve.pos, nil);
+		case c {
+		'<' =>	m = vs;
+		'>' =>	m = ve;
 		}
 	* =>
-		if(x >= len marks)
-			return (nil, sprint("bad mark %c", x));
-		p = marks[x];
+		return (nil, sprint("bad mark %c", c));
 	}
-	if(p == nil)
-		return (nil, sprint("mark %c empty", x));
-	return (p, nil);
+	if(m == nil)
+		return (nil, sprint("mark %c not set", c));
+	return (m, nil);
 }
 
-xmarkget(x: int): Pos
+xmarkget(c: int): ref Cursor
 {
-	(p, err) := markget(x);
+	(m, err) := markget(c);
 	if(err != nil)
 		xabort(err);
-	return *p;
+	return m;
 }
 
-xcheckreg(x: int)
+xmarkput(c: int, m: ref Cursor)
 {
-	if(x >= len registers)
-		xabort(sprint("bad register %c", x));
+	m = m.clone();
+	case c {
+	'a' to 'z' or
+	'.' or
+	'^' =>	marks[c] = m;
+	'`' or
+	'\'' =>	marks['`'] = marks['\''] = m;
+	# < and > cannot be set explicitly
+	* =>	xabort(sprint("bad mark %c", c));
+	}
 }
 
-xregset(x: int)
+# fix marks, cs-ce have just been deleted (and their positions are no longer valid!)
+markfixdel(cs, ce: ref Cursor)
 {
-	xcheckreg(x);
-	register = x;
+	for(i := 0; i < len marks; i++) {
+		m := marks[i];
+		if(m == nil || m.o < cs.o)
+			continue;
+		if(m.o < ce.o)
+			marks[i] = nil;
+		else
+			marks[i] = text.cursor(m.o-Cursor.diff(cs, ce));
+	}
+}
+
+# fix marks, n bytes have just been inserted at cs
+markfixins(cs: ref Cursor, n: int)
+{
+	for(i := 0; i < len marks; i++) {
+		m := marks[i];
+		if(m == nil || m.o < cs.o)
+			continue;
+		marks[i] = text.cursor(m.o+n);
+	}
+}
+
+xregset(c: int)
+{
+	# we don't know if it will be for get or set yet, so % is valid
+	if(c != '%')
+		xregcanput(c);
+	register = c;
+}
+
+xregget(c: int): string
+{
+	(s, err) := regget(c);
+	if(err == nil && s == nil)
+		err = sprint("register %c empty", c);
+	if(err != nil)
+		xabort(err);
+	return s;
+}
+
+xregcanput(c: int)
+{
+	case c {
+	'a' to 'z' or
+	'/' or
+	':' or
+	'.' or
+	'"' or
+	'A' to 'Z' or
+	'*' =>	return;
+	'%' =>	xabort("register % is read-only");
+	* =>	xabort(sprint("bad register %c", c));
+	}
+}
+
+xregput(x: int, s: string)
+{
+	err := regput(x, s);
+	if(err != nil)
+		xabort(err);
+}
+
+regget(c: int): (string, string)
+{
+	r: string;
+	case c {
+	'a' to 'z' or
+	'/' or
+	':' or
+	'.' or
+	'"' =>		r = registers[c];
+	'A' to 'Z' =>	r = registers[c-'A'+'a'];
+	'%' =>		r = filename;
+	'*' =>		r = tkclient->snarfget();
+	* =>		return (nil, sprint("bad register %c", c));
+	}
+	return (r, nil);
+}
+
+regput(c: int, s: string): string
+{
+	case c {
+	'a' to 'z' or
+	'/' or
+	':' or
+	'.' or
+	'"' =>
+		registers[c] = s;
+	'A' to 'Z' =>
+		registers[c-'A'+'a'] += s;
+	'%' =>
+		return "register % is read-only";
+	'*' =>
+		tkclient->snarfput(s);
+		return nil;
+	* =>	
+		return sprint("bad register %c", c);
+	}
+	return nil;
 }
 
 visual(cc: ref Cmd)
@@ -1263,22 +1242,52 @@ visual(cc: ref Cmd)
 	kb->Esc =>
 		xabort(nil);
 	'd' =>
-		textdel(Cchange|Csetcursor0, vs, ve);
+		textdel(Cchange|Csetcursorlo, vs, ve);
 	'y' =>
-		registerput(register, text.get(vs, ve));
+		xregput(register, text.get(vs, ve));
 	'J' =>
-		join(vs, ve);
+		join(vs, ve, 1);
 	'<' or
 	'>' =>
 		indent(vs.mvcol(0), ve, x == '<');
+	'r' =>
+		y := c.xget();
+		s: string;
+		n := abs(Cursor.diff(vs, ve));
+		while(n--)
+			s[len s] = y;
+		mv := Csetcursorlo;
+		if(y == '\n')
+			mv = Csetcursorhi;
+		textrepl(Cchange|mv, vs, ve, s);
 	'z' =>
 		plumb(text.get(vs, ve));
 	'Z' =>
 		run(text.get(vs, ve));
 	'!' =>
-		edit(xeditget(c, ":'<,'>!"));
+		ex(xeditget(c, ":'<,'>!"));
 	':' =>
-		edit(xeditget(c, ":'<,'>"));
+		ex(xeditget(c, ":'<,'>"));
+	'~' =>
+		textrepl(Cchange|Csetcursorlo, vs, ve, swapcase(text.get(vs, ve)));
+	'g' =>
+		case c.xget() {
+		'J' =>
+			join(vs, ve, 0);
+		'~' =>
+			textrepl(Cchange|Csetcursorlo, vs, ve, swapcase(text.get(vs, ve)));
+		'u' =>
+			textrepl(Cchange|Csetcursorlo, vs, ve, str->tolower(text.get(vs, ve)));
+		'U' =>
+			textrepl(Cchange|Csetcursorlo, vs, ve, str->toupper(text.get(vs, ve)));
+		* =>
+			c = cc.clone();
+			move(c, 1, Setjump, ce := cursor.clone());
+			visualmoved(vs, ve, ce);
+			cursorset(ce);
+			*cc = *c;
+			xconsumed();
+		}
 	* =>
 		case x {
 		'q' =>
@@ -1294,33 +1303,20 @@ visual(cc: ref Cmd)
 				xregset(c.xget());
 			'c' or
 			's' =>
-				textdel(Cchange|Csetcursor0, vs, ve);
+				textdel(Cchange|Csetcursorlo, vs, ve);
 				modeset(Insert);
 			'C' or
 			'S' or
 			'R' =>
 				if(mode != Visualline)
 					ve = ve.mvlineend(1);
-				textdel(Cchange|Csetcursor0, vs.mvcol(0), ve);
+				textdel(Cchange|Csetcursorlo, vs.mvcol(0), ve);
 				modeset(Insert);
 			* =>
-				jump := move(cc, 1, nc := cursor.clone());
-				if(mode == Visualline) {
-					if(Cursor.cmp(visualstart, nc) < 0) {
-						vs = visualstart = visualstart.mvcol(0);
-						nc = nc.mvlineend(0);
-						ve = nc.mvlineend(1);
-					} else {
-						vs = nc = nc.mvcol(0);
-						visualstart = visualstart.mvlineend(0);
-						ve = visualstart.mvlineend(1);
-					}
-					selectionset(vs.pos, ve.pos);
-				} else
-					visualset(nc);
-				cursorset(nc);
-				if(jump)
-					marks['`'] = marks['\''] = ref nc.pos;
+				c = cc.clone();
+				move(c, 1, Setjump, ce := cursor.clone());
+				visualmoved(vs, ve, ce);
+				cursorset(ce);
 			}
 			*cc = *c;
 			xconsumed();
@@ -1332,20 +1328,53 @@ visual(cc: ref Cmd)
 	xchange();
 }
 
+visualmoved(vs, ve, nc: ref Cursor)
+{
+	if(mode == Visualline) {
+		if(Cursor.cmp(visualstart, nc) < 0) {
+			vs = visualstart = visualstart.mvcol(0);
+			nc = nc.mvlineend(0);
+			ve = nc.mvlineend(1);
+		} else {
+			vs = nc = nc.mvcol(0);
+			visualstart = visualstart.mvlineend(0);
+			ve = visualstart.mvlineend(1);
+		}
+		selectionset(vs.pos, ve.pos);
+	} else
+		visualset(nc);
+}
+
 xeditget(c: ref Cmd, pre: string): string
 {
+	if(statusvisible) {
+		tkcmd("pack forget .s; pack .e -fill x -side bottom -after .t");
+		statusvisible = 0;
+	}
+
 	if(!c.more())
 		raise "edit:"+pre;
 
 	if(c.char() == kb->Esc)
 		xabort(nil);
 	s: string;
+Read:
 	for(;;)
 		case x := c.get() {
-		-1 =>	raise "no end of line from edit entry";
-		'\n' =>	say(sprint("xeditget, returning %q", s)); return s;
-		* =>	s[len s] = x;
+		-1 =>
+			# text from .e.entry has a newline, but don't require one from -c or '@'
+			break Read;
+		'\n' =>
+			say(sprint("xeditget, returning %q", s));
+			break Read;
+		* =>
+			s[len s] = x;
 		}
+	r := s[0];
+	if(r == '?')
+		r = '/';
+	xregput(r, s);
+	return s; 
 }
 
 commandmove(c: ref Cmd, num1, end: int): (int, ref Cursor)
@@ -1359,8 +1388,8 @@ commandmove(c: ref Cmd, num1, end: int): (int, ref Cursor)
 		*c = *cc;
 		return (num2, nil);
 	}
-	move(c, num1, nc := cursor.clone());
-	return (num2, nc);
+	move(c, num1, Nosetjump, ce := cursor.clone());
+	return (num2, ce);
 }
 
 command(cc: ref Cmd)
@@ -1369,82 +1398,135 @@ command(cc: ref Cmd)
 	c.xgetnum1();
 	num1 := c.num1(1);
 
+	cs := cursor;
 	case x := c.xget() {
 	kb->Esc =>
 		xabort(nil);
 	'x' =>
-		textdel(Cchange|Csetcursor0, nil, cursor.mvchar(num1));
+		textdel(Cchange|Csetcursorlo|Csetreg, nil, cursor.mvchar(num1));
 	'X' =>
-		textdel(Cchange|Csetcursor0, cursor.mvchar(-num1), nil);
+		textdel(Cchange|Csetcursorlo|Csetreg, cursor.mvchar(-num1), nil);
 	'd' =>
-		(num2, nc) := commandmove(c, num1, 'd');
-		if(nc == nil) {
-			origpos := cursor.pos;
-			textdel(Cchange, cursor.mvcol(0), cursor.mvline(num1*num2, Colstart));
-			cursorset(text.pos(origpos).mvbegin());
-		} else {
-			textdel(Cchange|Csetcursor0, nil, nc);
-		}
+		(num2, ce) := commandmove(c, num1, 'd');
+		if(ce == nil) {
+			(cs, ce) = (cursor.mvcol(0), cursor.mvline(num1*num2-1, Colpastnewline));
+			textdel(Cchange|Csetcursorlo|Csetreg, cs, ce);
+			cursorset(cursor.mvfirst());
+		} else
+			textdel(Cchange|Csetcursorlo|Csetreg, cs, ce);
 	'D' =>
-		textdel(Cchange|Csetcursor0, nil, cursor.mvline(num1-1, Colend));
+		textdel(Cchange|Csetcursorlo|Csetreg, nil, cursor.mvline(num1-1, Colend));
 	'y' =>
-		(num2, nc) := commandmove(c, num1, 'y');
-		if(nc == nil)
-			txt := text.get(cursor.mvcol(0), cursor.mvline(num1*num2, Colstart));
-		else
-			txt = text.get(cursor, nc);
-		registerput(register, txt);
+		(num2, ce) := commandmove(c, num1, 'y');
+		if(ce == nil)
+			(cs, ce) = (cs.mvcol(0), cs.mvline(num1*num2-1, Colpastnewline));
+		(cs, ce) = Cursor.order(cs, ce);
+		xregput(register, text.get(cs, ce));
 	'Y' =>
-		txt := text.get(cursor.mvcol(0), cursor.mvline(num1, Colstart));
-		registerput(register, txt);
+		s := text.get(cursor.mvcol(0), cursor.mvline(num1, Colstart));
+		xregput(register, s);
 	'p' =>
-		textins(Cchange, nil, xregisterget(register));
+		s := xregget(register);
+		if(s[len s-1] == '\n')
+			cs = cs.mvlineend(1);
+		textins(Cchange|Csetcursorlo, cs, s);
 	'P' =>
-		txt := xregisterget(register);
-		cursorset(cursor.mvline(-1, Colstart));
-		textins(Cchange, nil, txt);
+		s := xregget(register);
+		if(s[len s-1] == '\n')
+			cursorset(cursor.mvcol(0));
+		textins(Cchange, nil, s);
 	'<' or
 	'>' =>
-		(num2, nc) := commandmove(c, num1, x);
-		if(nc != nil)
-			(cs, ce) := Cursor.order(cursor, nc);
-		else
-			(cs, ce) = (cursor, cursor.mvline(max(0, num1*num2-1), Colend));
+		(num2, ce) := commandmove(c, num1, x);
+		if(ce == nil)
+			ce = cursor.mvline(max(0, num1*num2-1), Colend);
+		(cs, ce) = Cursor.order(cs, ce);
 		indent(cs.mvcol(0), ce.mvlineend(0), x == '<');
 	'J' =>
-		cs := cursor.mvlineend(0);
-		ce := cursor.mvline(max(1, num1-1), Colstart);
-		join(cs, ce);
+		cs = cursor.mvlineend(0);
+		ce := cursor.mvline(max(0, num1), Colpastnewline);
+		join(cs, ce, 1);
 	'm' =>
-		xx := c.xget();
-		xcheckmark(xx);
-		marks[xx] = ref cursor.pos;
+		y := c.xget();
+		xmarkput(y, cursor);
 	'r' =>
-		xx := c.xget();
 		ce := cursor.mvchar(+num1);
-		if(ce.pos.c < cursor.pos.c+num1)
+		if(Cursor.diff(cursor, ce) < num1)
 			xabort(nil);
-		textdel(Cchange|Csetcursor0, nil, ce);
-		s := "";
+		y := c.xget();
+		textdel(Cchange|Csetcursorlo, nil, ce);
+		s: string;
 		while(num1--)
-			s[len s] = xx;
-		textins(Cchange, nil, s);
+			s[len s] = y;
+		mv := 0;
+		if(y == '\n')
+			mv = Csetcursorhi;
+		textins(Cchange|mv, nil, s);
 	'!' =>
-		(num2, nc) := commandmove(c, num1, '!');
-		if(nc == nil)
-			nc = text.pos(Pos(num1*num2-1, 0));
-		if(cursor.pos.l == nc.pos.l)
+		(num2, ce) := commandmove(c, num1, '!');
+		if(ce == nil)
+			ce = cs.mvline(num1*num2-1, 0);
+		if(cursor.pos.l == ce.pos.l)
 			pre := ":.!";
 		else
-			pre = sprint(":.,%+d!", nc.pos.l-cursor.pos.l);
+			pre = sprint(":.,%+d!", ce.pos.l-cursor.pos.l);
 		s := xeditget(c, pre);
-		edit(s);
+		ex(s);
 	'Z' =>
-		xx := c.xget();
-		if(xx == 'Z')
-			writemodifiedquit(0);
-		else
-			xabort(nil);
+		case c.xget() {
+		'Z' =>	writemodifiedquit(0);
+		* =>	xabort(nil);
+		}
+	'~' =>
+		ce := cs.mvchar(+num1);
+		r := swapcase(text.get(cs, ce));
+		textrepl(Cchange|Csetcursorhi, cs, ce, r);
+	'g' =>
+		case y := c.xget() {
+		'J' =>
+			cs = cursor.mvlineend(0);
+			ce := cursor.mvline(max(1, num1-1), Colstart);
+			join(cs, ce, 0);
+		'~' =>
+			(num2, ce) := commandmove(c, num1, '~');
+			if(ce == nil) {
+				ce = cursor.mvline(num1*num2-1, Colpastnewline).mvfirst();
+				cs = cs.mvfirst();
+			}
+			(cs, ce) = Cursor.order(cs, ce);
+			s := swapcase(text.get(cs, ce));
+			textrepl(Cchange|Csetcursorlo, cs, ce, s);
+		'u' or
+		'U' =>
+			(num2, ce) := commandmove(c, num1, y);
+			if(ce == nil) {
+				ce = cs.mvline(num1*num2-1, Colpastnewline).mvfirst();
+				cs = cs.mvfirst();
+			}
+			(cs, ce) = Cursor.order(cs, ce);
+			s := text.get(cs, ce);
+			if(y == 'u')
+				s = str->tolower(s);
+			else
+				s = str->toupper(s);
+			textrepl(Cchange|Csetcursorlo, cs, ce, s);
+		'i' =>
+			cursorset(xmarkget('^'));
+			modeset(Insert);
+			*cc = *c;
+			xconsumed();
+		'I' =>
+			cursorset(cursor.mvcol(0));
+			modeset(Insert);
+			*cc = *c;
+			xconsumed();
+		* =>
+			c = cc.clone();
+			move(c, 1, Setjump, ce := cursor.clone());
+			cursorset(ce);
+			*cc = *c;
+			xmoveonly();
+		}
 	* =>
 		case x {
 		kb->APP|'g' =>
@@ -1454,17 +1536,18 @@ command(cc: ref Cmd)
 		kb->APP|'l' =>
 			redraw();
 		'@' =>
-			xx := c.xget();
-			ss := xregisterget(xx);
-			ocmd := cmdcur;
-			while(num1-- > 0) {
-				cmdcur = Cmd.mk(ss);
-				interpx();
-			}
-			cmdcur = ocmd;
+			y := c.xget();
+			if(y == '@') {
+				if(lastmacro == 0)
+					xabort("no previous macro");
+				y = lastmacro;
+			} else
+				lastmacro = y;
+			ss := xregget(y);
+			macro(num1, ss);
+		'Q' or
 		':' =>
-			s := xeditget(c, ":");
-			edit(s);
+			ex(xeditget(c, ":"));
 		'u' =>
 			undo();
 		'.' =>
@@ -1500,30 +1583,30 @@ command(cc: ref Cmd)
 		* =>
 			case x {
 			'c' =>
-				(num2, nc) := commandmove(c, num1, 'c');
-				if(nc == nil)
-					nc = cursor.mvline(num1*num2, Colpastnewline);
-				textdel(Cchange|Csetcursor0, nil, nc);
+				(num2, ce) := commandmove(c, num1, 'c');
+				if(ce == nil)
+					ce = cursor.mvline(num1*num2, Colpastnewline);
+				textdel(Cchange|Csetcursorlo|Csetreg, nil, ce);
 				modeset(Insert);
 			'C' =>
-				textdel(Cchange|Csetcursor0, nil, cursor.mvlineend(0));
+				textdel(Cchange|Csetcursorlo|Csetreg, nil, cursor.mvlineend(0));
 				modeset(Insert);
 			's' =>
-				cs := cursor.clone();
+				cs = cursor.clone();
 				ce := cursor.clone();
 				if(cs.char() == '\n' && cs.pos.c != 0)
 					cs.prev();
 				else if(cs.char() != '\n')
 					ce.next();
-				textdel(Cchange|Csetcursor0, cs, ce);
+				textdel(Cchange|Csetcursorlo|Csetreg, cs, ce);
 				modeset(Insert);
 			'S' =>
-				textdel(Cchange|Csetcursor0, cursor.mvcol(0), cursor.mvlineend(0));
+				textdel(Cchange|Csetcursorlo|Csetreg, cursor.mvcol(0), cursor.mvlineend(0));
 				modeset(Insert);
 			'i' =>
 				modeset(Insert);
 			'I' =>
-				cursorset(cursor.mvbegin());
+				cursorset(cursor.mvfirst());
 				modeset(Insert);
 			'a' =>
 				cursorset(cursor.mvchar(+1));
@@ -1533,12 +1616,12 @@ command(cc: ref Cmd)
 				modeset(Insert);
 			'o' =>
 				cursorset(cursor.mvlineend(0));
-				textins(Cchange|Csetcursor1, nil, "\n");
 				modeset(Insert);
+				textins(Cchange|Csetcursorhi, nil, "\n");
 			'O' =>
 				cursorset(cursor.mvcol(0));
-				textins(Cchange, nil, "\n");
 				modeset(Insert);
+				textins(Cchange, nil, "\n");
 			'R' =>
 				modeset(Replace);
 			'"' =>
@@ -1566,10 +1649,8 @@ command(cc: ref Cmd)
 				}
 			* =>
 				c = cc.clone();
-				jump := move(c, 1, nc := cursor.clone());
-				if(jump)
-					marks['`'] = marks['\''] = ref cursor.pos;
-				cursorset(nc);
+				move(c, 1, Setjump, ce := cursor.clone());
+				cursorset(ce);
 				*cc = *c;
 				xmoveonly();
 			}
@@ -1588,18 +1669,42 @@ recordq(c: ref Cmd)
 {
 	say(sprint("recordq, recordreg %c, record %q, c %s", recordreg, record, c.text()));
 	if(recordreg >= 0) {
-		registers[recordreg] = record[:len record-1];  # strip last 'q' at end
+		xregput(recordreg, record[:len record-1]); # strip last 'q' at end
 		say(sprint("register %c now %q", recordreg, registers[recordreg]));
 		record = nil;
 		recordreg = -1;
 	} else {
-		xx := c.xget();
-		xcheckreg(xx);
-		recordreg = xx;
+		y := c.xget();
+		xregcanput(y);
+		recordreg = y;
 	}
 }
 
-# after delete, cursor will be at b's position
+# whether text was inserted/replaced
+inserted(): int
+{
+	if(change != nil)
+		pick m := hd change.l {
+		Ins =>
+			return m.o+len m.s == cursor.o;
+		}
+	return 0;
+}
+
+textrepl(rec: int, a, b: ref Cursor, s: string)
+{
+	if(a == nil)
+		a = cursor;
+	if(b == nil)
+		b = cursor;
+	textdel(rec, a, b);
+	textins(rec, a, s);
+}
+
+# delete from a to b.
+# rec indicates whether a Change must be recorded,
+# where the cursor should be,
+# and whether the last change register should be set.
 textdel(rec: int, a, b: ref Cursor)
 {
 	if(a == nil)
@@ -1607,19 +1712,15 @@ textdel(rec: int, a, b: ref Cursor)
 	if(b == nil)
 		b = cursor;
 
-	n: ref Cursor;
-	setcursor := rec & ~Cmask;
-	case setcursor {
-	0 =>		{}
-	Csetcursor0 =>	n = a;
-	Csetcursor1 =>	n = b;
-	* =>		raise "bad rec";
-	}
+	setreg := rec & Csetreg;
+	setcursor := rec & Csetcursormask;
 
-	(a, b) = Cursor.order(a, b);
+	swap := Cursor.cmp(a, b) > 0;
+	if(swap)
+		(a, b) = ret(b, a);
 	s := text.get(a, b);
 
-	rec &= Cmask;
+	rec &= Cchangemask;
 Change:
 	case rec {
 	Cnone =>
@@ -1677,11 +1778,13 @@ Change:
 	* =>
 		raise "bad rec";
 	}
-	registers[register] = s;
+	if(setreg)
+		xregput(register, s);
 	tkcmd(sprint(".t.text delete %s %s", a.pos.text(), b.pos.text()));
 	text.del(a, b);
+	markfixdel(a, b);
 	if(rec != Cnone)
-		marks['['] = marks[']'] = marks['.'] = ref a.pos;
+		xmarkput('.', a);
 
 	if(rec == Cmodrepl) {
 		# Mod.Del may be absent, eg when replace was started at end of file
@@ -1694,6 +1797,7 @@ Change:
 					os := m.s[nn:];
 					m.s = m.s[:nn];
 					text.ins(a, os);
+					markfixins(a, len os);
 					tkcmd(sprint(".t.text insert %s '%s", a.pos.text(), os));
 					tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", a.pos.text(), a.pos.text(), len os));
 				}
@@ -1712,8 +1816,16 @@ Change:
 		if(change.l == nil)
 			change = nil;
 	}
-	if(setcursor)
+	if(setcursor) {
+		n: ref Cursor;
+		case setcursor {
+		0 =>		{}
+		Csetcursorlo =>	n = a;
+		Csetcursorhi =>	n = b;
+		* =>		raise "bad rec";
+		}
 		cursorset(n);
+	}
 }
 
 textins(rec: int, c: ref Cursor, s: string)
@@ -1721,8 +1833,8 @@ textins(rec: int, c: ref Cursor, s: string)
 	if(c == nil)
 		c = cursor;
 
-	setcursor := rec&~Cmask;
-	rec &= Cmask;
+	setcursor := rec&Csetcursormask;
+	rec &= Cchangemask;
 
 Change:
 	case rec {
@@ -1754,6 +1866,7 @@ Change:
 				(a, b) := (text.cursor(c.o), text.cursor(c.o+n));
 				tkcmd(sprint(".t.text delete %s %s", a.pos.text(), b.pos.text()));
 				os := text.del(a, b);
+				markfixdel(a, b);
 				if(tl change.l != nil) {
 					pick m := hd tl change.l {
 					Del =>
@@ -1774,14 +1887,14 @@ Change:
 	tkcmd(sprint(".t.text insert %s '%s", c.pos.text(), s));
 	tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", c.pos.text(), c.pos.text(), len s));
 	nc := text.ins(c, s);
+	markfixins(c, len s);
 	case setcursor {
 	0 =>	{}
-	Csetcursor0 =>	cursorset(c);
-	Csetcursor1 =>	cursorset(nc);
+	Csetcursorlo =>	cursorset(c);
+	Csetcursorhi =>	cursorset(nc);
 	* =>	raise "bad rec";
 	}
 
-	marks['"'] = ref cursor.pos;
 	modified = 1;
 	say(sprint("textins, inserted %q, cursor now %s", s, cursor.text()));
 }
@@ -1821,32 +1934,58 @@ indent(cs, ce: ref Cursor, rev: int)
 		}
 	}
 	
-	textdel(Cchange|Csetcursor0, cs, ce);
+	textdel(Cchange|Csetcursorlo, cs, ce);
 	textins(Cchange, nil, r);
-	cursorset(cursor.mvbegin());
+	cursorset(cursor.mvfirst());
+}
+
+# could try harder with more broader unicode support
+swapcasex(c: int): int
+{
+	case c {
+	'a' to 'z' =>	return c-'a'+'A';
+	'A' to 'Z' =>	return c-'A'+'a';
+	* =>		return c;
+	}
+}
+
+swapcase(s: string): string
+{
+	r: string;
+	for(i := 0; i < len s; i++)
+		r[len r] = swapcasex(s[i]);
+	return r;
+}
+
+macro(n: int, s: string)
+{
+	ocmd := cmdcur;
+	while(n-- > 0) {
+		cmdcur = Cmd.mk(s);
+		interpx();
+	}
+	cmdcur = ocmd;
 }
 
 # remove empty lines, replace newline by a space
-join(cs, ce: ref Cursor)
+join(cs, ce: ref Cursor, space: int)
 {
-	if(cs.pos.l == ce.pos.l)
-		ce = ce.mvline(1, Colkeep);
-	cs = cs.mvlineend(0);
-	ce = ce.mvcol(0);
 	s := text.get(cs, ce);
+say(sprint("join, s %q", s));
 
 	r := "";
 	for(i := 0; i < len s; i++)
 		case s[i] {
 		'\n' =>
-			r[len r] = ' ';
-			while(i < len s && s[i] == '\n')
+			if(space)
+				r[len r] = ' ';
+			while(i+1 < len s && s[i+1] == '\n')
 				++i;
 		* =>
 			r[len r] = s[i];
 		}
 
-	textdel(Cchange|Csetcursor0, cs, ce);
+	textdel(Cchange|Csetcursorlo, cs, ce);
 	textins(Cchange, nil, r);
 }
 
@@ -1936,6 +2075,15 @@ textwrite(force: int, f: string, cs, ce: ref Cursor): string
 		if(f == filename)
 			filefd = fd;
 	} else {
+		(ok, st) := sys->fstat(filefd);
+		if(ok < 0)
+			return sprint("stat: %r");
+		if(!force) {
+			if(st.qid.vers != filestat.qid.vers)
+				return sprint("file's qid version has changed, not writing");
+			if(st.mtime != filestat.mtime || st.length != filestat.length)
+				return sprint("file's length or mtime has changed, not writing");
+		}
 		sys->seek(filefd, big 0, Sys->SEEKSTART);
 		d := sys->nulldir;
 		d.length = big 0;
@@ -1943,7 +2091,29 @@ textwrite(force: int, f: string, cs, ce: ref Cursor): string
 			return sprint("truncate %q: %r", f);
 		fd = filefd;
 	}
-	return bufwritefd(text, cs, ce, fd);
+	err := bufwritefd(text, cs, ce, fd);
+	if(filefd != nil) {
+		ok: int;
+		(ok, filestat) = sys->fstat(filefd);
+		if(ok < 0)
+			return sprint("stat after write: %r");
+	}
+	return err;
+}
+
+textappend(f: string, cs, ce: ref Cursor): string
+{
+	if(cs == nil)
+		s := text.str();
+	else
+		s = text.get(cs, ce);
+	b := bufio->open(f, Sys->OWRITE);
+	if(b == nil)
+		return sprint("open: %r");
+	b.seek(big 0, bufio->SEEKEND);
+	if(b.puts(s) == Bufio->ERROR || b.flush() == Bufio->ERROR)
+		return sprint("write: %r");
+	return nil;
 }
 
 statuswarn(s: string)
@@ -1981,6 +2151,10 @@ statusset()
 	if(statustext != nil)
 		s += ", "+statustext;
 	tkcmd(sprint(".s.status configure -text '%s", s));
+	if(!statusvisible) {
+		tkcmd("pack forget .e; pack .s -fill x -side bottom -after .t");
+		statusvisible = 1;
+	}
 }
 
 statusclear()
@@ -1995,38 +2169,15 @@ modeset(m: int)
 	case mode {
 	Insert or
 	Replace =>
-		marks['^'] = ref cursor.pos;
+		xmarkput('^', cursor);
+		if(change != nil)
+			pick mm := hd change.l {
+			Ins =>
+				xregput('.', mm.s);
+			}
 	}
 	mode = m;
 	statusset();
-}
-
-registerget(c: int): string
-{
-	if(c >= len registers)
-		return nil;
-	if(c == '*')
-		return tkclient->snarfget();
-	return registers[c];
-}
-
-registerput(c: int, s: string): string
-{
-	if(c >= len registers)
-		return "bad register";
-	if(c == '*')
-		tkclient->snarfput(s);
-	else
-		registers[c] = s;
-	return nil;
-}
-
-xregisterget(x: int): string
-{
-	s := registerget(x);
-	if(s == nil)
-		xabort(sprint("register %c empty", x));
-	return s;
 }
 
 readfile(f: string): (string, string)
@@ -2053,6 +2204,7 @@ hasnewline(s: string): int
 
 redraw()
 {
+	(spos, nil) := tkvisible();
 	tkcmd(".t.text delete 1.0 end");
 	tkcmd(".t.text insert 1.0 '"+text.s);
 	tkaddeof();
@@ -2076,6 +2228,7 @@ redraw()
 	* =>
 		cursorset(cursor);
 	}
+	tkcmd(sprint(".t.text see %s", spos.text()));
 }
 
 ret[T](a, b: T): (T, T)

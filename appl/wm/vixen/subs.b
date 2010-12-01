@@ -69,7 +69,7 @@ reapply(repl: ref Repl, r: array of (int, int)): string
 
 	cs := text.cursor(r[0].t0);
 	ce := text.cursor(r[0].t1);
-	textdel(Cchange|Csetcursor0, cs, ce);
+	textdel(Cchange|Csetcursorlo, cs, ce);
 	textins(Cchange, cs, s);
 	return nil;
 }

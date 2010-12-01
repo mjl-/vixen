@@ -17,6 +17,7 @@ Cmd: adt {
 	rem:		fn(c: self ref Cmd): string;
 	num1:		fn(c: self ref Cmd, def: int): int;
 	num2:		fn(c: self ref Cmd, def: int): int;
+	getint:		fn(c: self ref Cmd, def: int): int;
 	getnum:		fn(c: self ref Cmd): string;
 	xgetnum:	fn(c: self ref Cmd): string;
 	getnum1:	fn(c: self ref Cmd);
@@ -60,7 +61,10 @@ Cmd.xget(c: self ref Cmd): int
 {
 	if(!c.more())
 		raise "more:";
-	return c.get();
+	x := c.get();
+	if(x == kb->Esc)
+		raise "abort:";
+	return x;
 }
 
 Cmd.put(c: self ref Cmd, x: int)
@@ -112,6 +116,18 @@ Cmd.num2(c: self ref Cmd, def: int): int
 	if(c.n2 == nil)
 		return def;
 	return int c.n2;
+}
+
+# getint reads as many digits as possible.
+# getnum below is for movements, where a num is only complete if it ends with a non-digit.
+Cmd.getint(c: self ref Cmd, def: int): int
+{
+	s: string;
+	while(c.more() && str->in(c.char(), "0-9"))
+		s[len s] = c.get();
+	if(s != nil)
+		def = int s;
+	return def;
 }
 
 Cmd.getnum(c: self ref Cmd): string
