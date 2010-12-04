@@ -1,6 +1,7 @@
 Pos: adt {
 	l, c:	int;  # line, column
 
+	cmp:		fn(a, b: Pos): int;
 	order:		fn(a, b: Pos): (Pos, Pos);
 	eq:		fn(a, b: Pos): int;
 	parse:		fn(s: string): Pos;
@@ -29,6 +30,8 @@ Cursor: adt {
 	mvword,
 	mvwordend:	fn(c: self ref Cursor, capital: int, n: int): ref Cursor;
 	mvfirst:	fn(c: self ref Cursor): ref Cursor;
+	mvsentence:	fn(c: self ref Cursor, prev: int): ref Cursor;
+	mvparagraph:	fn(c: self ref Cursor, prev: int): ref Cursor;
 	mvskip:		fn(c: self ref Cursor, cl: string): ref Cursor;
 
 	word:		fn(c: self ref Cursor): (ref Cursor, ref Cursor);
@@ -70,6 +73,13 @@ checkcursor(c: ref Cursor)
 		cc.next();
 	if(!Pos.eq(c.pos, cc.pos))
 		raise sprint("cursor has wrong pos, got %s, pos should be %s", c.text(), cc.pos.text());
+}
+
+Pos.cmp(a, b: Pos): int
+{
+	if(a.l < b.l || a.l == b.l && a.c < b.c) return -1;
+	if(a.l > b.l || a.l == b.l && a.c > b.c) return 1;
+	return 0;
 }
 
 Pos.order(a, b: Pos): (Pos, Pos)
@@ -366,6 +376,52 @@ Cursor.mvwordend(cc: self ref Cursor, cap: int, n: int): ref Cursor
 Cursor.mvfirst(c: self ref Cursor): ref Cursor
 {
 	return c.clone().mvcol(0).mvskip(" \t");
+}
+
+Cursor.mvsentence(c: self ref Cursor, prev: int): ref Cursor
+{
+	c = c.clone();
+	Lineend: con ".!?";
+	if(prev) {
+		# beginning of previous sentence
+		y := c.prev();
+		while(y >= 0 && (str->in(y, Lineend) || str->in(y, whitespace)))
+			y = c.prev();
+		c = c.findchar(Lineend, 1);
+		if(c != nil)
+			c = c.mvskip(Lineend+whitespace);
+		else
+			c = text.cursor(0);
+	} else {
+		c = c.mvskip("^"+Lineend);
+		c = c.mvskip(Lineend+whitespace);
+	}
+	return c;
+}
+
+Cursor.mvparagraph(c: self ref Cursor, prev: int): ref Cursor
+{
+	c = c.clone();
+	if(prev) {
+		x := c.prev();
+		while(x == '\n')
+			x = c.prev();
+		c = c.findstr("\n\n", 1);
+		if(c == nil)
+			c = text.cursor(0);
+		else
+			c.next();
+	} else {
+		x := c.char();
+		while(x == '\n')
+			x = c.next();
+		c = c.findstr("\n\n", 0);
+		if(c == nil)
+			c = text.end();
+		else
+			c.next();
+	}
+	return c;
 }
 
 Cursor.mvskip(cc: self ref Cursor, cl: string): ref Cursor

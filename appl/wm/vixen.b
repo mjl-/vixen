@@ -43,6 +43,7 @@ Vixen: module {
 
 
 # 't' for tk events
+# 'k' for tk commands
 # 'e' for edit
 # 'x' for ex
 # 'i' for interp (insert/replace, command, visual, move)
@@ -66,6 +67,7 @@ Csetcursormask: con Csetcursorlo|Csetcursorhi;
 
 mode: int;
 visualstart: ref Cursor;  # start of visual select, non-nil when mode == Visual or Visualline
+visualend: ref Cursor;  # end of visual select
 cmdcur: ref Cmd;  # current command
 cmdprev: ref Cmd;  # previous (completed) command, for '.'
 recordreg := -1;  # register currently recording to, < 0 when not recording
@@ -112,6 +114,8 @@ b3prev: ref Pos;  # previous position while button3 down
 
 statusvisible := 1;  # whether tk frame with status label is visible (and edit entry is not)
 
+highlightstart, highlightend: ref Cursor;  # range to highlight for search match, can be nil
+
 plumbed: int;
 top: ref Tk->Toplevel;
 wmctl: chan of string;
@@ -140,6 +144,7 @@ tkcmds0 := array[] of {
 "bind .t.text <Configure> {send text resized}",
 
 ".t.text tag configure eof -foreground blue -background white",
+".t.text tag configure search -background yellow -foreground black",
 
 "pack .t.vscroll -fill y -side left",
 "pack .t.text -fill both -expand 1 -side right",
@@ -306,9 +311,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 		case hd t {
 		"b1down" =>
 			pos := Pos.parse(tkcmd(".t.text index "+hd tl t));
-			tkselcolor(Normal);
 			modeset(Command0);
 			cursorset(text.pos(pos));
+			tkselectionset(cursor.pos, cursor.pos);
+			tkselcolor(Normal);
 		"b1up" =>
 			nc := text.pos(Pos.parse(tkcmd(".t.text index "+hd tl t)));
 			ranges := tkcmd(".t.text tag ranges sel");
@@ -324,16 +330,18 @@ init(ctxt: ref Draw->Context, args: list of string)
 				cursor = text.pos(Pos.parse(hd tl l));
 				if(Cursor.cmp(nc, cursor) < 0)
 					(cursor, visualstart) = ret(visualstart, cursor);
+				visualend = cursor.clone();
 				cursorset(cursor);
 			}
 		"b3down" =>
 			pos := ref Pos.parse(tkcmd(".t.text index "+hd tl t));
 			if(b3start == nil) {
+				tkselectionset(cursor.pos, cursor.pos);
 				tkselcolor(Green);
 				b3start = b3prev = pos;
 			} else if(!Pos.eq(*pos, *b3prev)) {
 				(a, b) := Pos.order(*pos, *b3start);
-				selectionset(a, b);
+				tkselectionset(a, b);
 				b3prev = pos;
 			}
 			say('t', sprint("b3down at char %s", (*pos).text()));
@@ -357,15 +365,15 @@ init(ctxt: ref Draw->Context, args: list of string)
 				plumb(text.get(cs, ce));
 			}
 			b3start = b3prev = nil;
-			tkselcolor(Normal);
 			case mode {
 			Visual or
 			Visualline =>
 				cursorset(cursor);
-				visualset(cursor);
+				visualset();
 			* =>
 				tkcmd(sprint(".t.text tag remove sel 1.0 end"));
 			}
+			tkselcolor(Normal);
 		"resized" =>
 			tkcmd(".t.text see insert");
 		* =>
@@ -528,7 +536,7 @@ Read:
 		* =>
 			s[len s] = x;
 		}
-	r := s[0];
+	r := pre[0];
 	if(r == '?')
 		r = '/';
 	xregput(r, s);
@@ -686,11 +694,11 @@ searchall(re: Regex->Re): array of (int, int)
 	return r;
 }
 
-search(rev, srev: int, re: Regex->Re, cr: ref Cursor): ref Cursor
+search(rev, srev: int, re: Regex->Re, cr: ref Cursor): (ref Cursor, ref Cursor)
 {
 	if(re == nil) {
 		statuswarn("no search pattern set");
-		return nil;
+		return (nil, nil);
 	}
 	if(srev)
 		rev = !rev;
@@ -698,7 +706,7 @@ search(rev, srev: int, re: Regex->Re, cr: ref Cursor): ref Cursor
 	r := searchall(re);
 	if(len r == 0 || r[0].t0 < 0) {
 		statuswarn("pattern not found");
-		return nil;
+		return (nil, nil);
 	}
 	i: int;
 	if(rev) {
@@ -718,8 +726,7 @@ search(rev, srev: int, re: Regex->Re, cr: ref Cursor): ref Cursor
 			statuswarn("search wrapped");
 		}
 	}
-	newo := r[i].t0;
-	return text.cursor(newo);
+	return (text.cursor(r[i].t0), text.cursor(r[i].t1));
 }
 
 
@@ -815,10 +822,8 @@ markget(c: int): (ref Cursor, string)
 	'<' or
 	'>' =>
 		if(mode != Visual && mode != Visualline)
-			break;
-		(vs, ve) := Cursor.order(visualstart.clone(), cursor.clone());
-		if(mode == Visualline)
-			ve = ve.mvlineend(1);
+			return (nil, "selection not set");
+		(vs, ve) := visualrange();
 		case c {
 		'<' =>	m = vs;
 		'>' =>	m = ve;
@@ -922,6 +927,8 @@ textrepl(rec: int, a, b: ref Cursor, s: string)
 # and whether the last change register should be set.
 textdel(rec: int, a, b: ref Cursor)
 {
+	highlightstart = highlightend = nil;
+
 	if(a == nil)
 		a = cursor;
 	if(b == nil)
@@ -1045,6 +1052,8 @@ Change:
 
 textins(rec: int, c: ref Cursor, s: string)
 {
+	highlightstart = highlightend = nil;
+
 	if(c == nil)
 		c = cursor;
 
@@ -1231,13 +1240,23 @@ statuswarn(s: string)
 	statusset();
 }
 
-visualset(c: ref Cursor)
+visualrange(): (ref Cursor, ref Cursor)
 {
-	(a, b) := Cursor.order(visualstart, c);
-	selectionset(a.pos, b.pos);
+	(a, b) := Cursor.order(visualstart.clone(), visualend.clone());
+	if(mode == Visualline) {
+		a = a.mvcol(0);
+		b = b.mvlineend(1);
+	}
+	return (a, b);
 }
 
-selectionset(a, b: Pos)
+visualset()
+{
+	(a, b) := visualrange();
+	tkselectionset(a.pos, b.pos);
+}
+
+tkselectionset(a, b: Pos)
 {
 	say('t', sprint("selectionset, from %s to %s", a.text(), b.text()));
 	tkcmd(".t.text tag remove sel 1.0 end");
@@ -1284,33 +1303,38 @@ redraw()
 	tkcmd(".t.text insert 1.0 '"+text.s);
 	tkaddeof();
 	case mode {
-	Visual =>
-		(vs, ve) := Cursor.order(visualstart, cursor);
-		selectionset(vs.pos, ve.pos);
-		cursorset(cursor);
+	Visual or
 	Visualline =>
-		vs, ve: ref Cursor;
-		if(Cursor.cmp(visualstart, cursor) < 0) {
-			vs = visualstart.mvcol(0);
-			ve = cursor.mvlineend(1);
-			cursorset(cursor.mvlineend(0));
-		} else {
-			vs = cursor.mvcol(0);
-			ve = visualstart.mvlineend(1);
-			cursorset(cursor.mvcol(0));
-		}
-		selectionset(vs.pos, ve.pos);
-	* =>
-		cursorset(cursor);
+		visualset();
 	}
+	cursorset(cursor);
+	tkhighlight(highlightstart, highlightend);
 	tkcmd(sprint(".t.text see %s", spos.text()));
+}
+
+tkhighlightclear()
+{
+	tkcmd(".t.text tag remove search 1.0 end");
+	highlightstart = highlightend = nil;
+}
+
+tkhighlight(s, e: ref Cursor)
+{
+	tkhighlightclear();
+	tkcmd(sprint(".t.text tag add search %s %s", s.pos.text(), e.pos.text()));
+	(highlightstart, highlightend) = (s, e);
+}
+
+tkinsertset(p: Pos)
+{
+	tkcmd(sprint(".t.text mark set insert %s", p.text()));
 }
 
 cursorset0(c: ref Cursor, see: int)
 {
 	say('c', sprint("new cursor: %s", c.text()));
 	cursor = c;
-	tkcmd(sprint(".t.text mark set insert %s", c.pos.text()));
+	tkinsertset(c.pos);
 	if(see)
 		tkcmd(sprint(".t.text see %s", c.pos.text()));
 }
@@ -1325,12 +1349,21 @@ up()
 	tkcmd("update");
 }
 
+tkvisibletop(): Pos
+{
+	return Pos.parse(tkcmd(".t.text index @0,0"));
+}
+
+tkvisiblebottom(): Pos
+{
+	height := tkcmd(".t.text cget -actheight");
+	s := tkcmd(sprint(".t.text index @0,%d", int height-1));
+	return Pos.parse(s);
+}
 
 tkvisible(): (Pos, Pos)
 {
-	a := tkcmd(".t.text index @0,0");
-	b := tkcmd(sprint(".t.text index @%s,%s", tkcmd(".t.text cget -actwidth"), tkcmd(".t.text cget -actheight")));
-	return (Pos.parse(a), Pos.parse(b));
+	return (tkvisibletop(), tkvisiblebottom());
 }
 
 tklinesvisible(): int
@@ -1349,6 +1382,7 @@ tkselcolor(w: int)
 
 tkcmd(s: string): string
 {
+	say('k', s);
 	r := tk->cmd(top, s);
 	if(r != nil && r[0] == '!')
 		warn(sprint("tkcmd: %q: %s", s, r));

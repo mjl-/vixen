@@ -210,22 +210,28 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 	'?' =>
 		s := xeditget(c, sprint("%c", x));
 		searchreverse = (x == '?');
+		ms, me: ref Cursor;
 		if(s == nil || searchset(s)) {
-			nc := search(0, searchreverse, searchregex, cr);
-			b.beepset(nc);
-			if(nc == nil)
+			(ms, me) = search(0, searchreverse, searchregex, cr);
+			b.beepset(ms);
+			if(ms == nil)
 				break;
 		}
+		if(ms != nil)
+			tkhighlight(ms, me);
 		jump = 1;
 	'n' or
 	'N' =>
 		rev := x == 'N';
+		ms, me: ref Cursor;
 		while(num--) {
-			nc := search(rev, searchreverse, searchregex, b.dst);
-			b.beepset(nc);
-			if(nc == nil)
+			(ms, me) = search(rev, searchreverse, searchregex, b.dst);
+			b.beepset(ms);
+			if(ms == nil)
 				break;
 		}
+		if(ms != nil)
+			tkhighlight(ms, me);
 		jump = 1;
 	'*' or
 	'#' =>	
@@ -243,12 +249,15 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 			xabort("bad pattern (internal error)");
 		if(rev)
 			b.beepset(ws);
+		ms, me: ref Cursor;
 		while(num--) {
-			nc := search(rev, 0, re, b.dst);
-			b.beepset(nc);
-			if(nc == nil)
+			(ms, me) = search(rev, 0, re, b.dst);
+			b.beepset(ms);
+			if(ms == nil)
 				break;
 		}
+		if(ms != nil)
+			tkhighlight(ms, me);
 		jump = 1;
 	'%' =>
 		if(numstr != nil) {
@@ -296,49 +305,25 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 		if(numstr != nil)
 			n = int numstr;
 		b.set(cr.mvcol(n*mult));
-	'(' =>
-		# beginning of previous sentence
-		Lineend: con ".!?";
-		nc := cr.clone();
-		y := nc.prev();
-		while(y >= 0 && (str->in(y, Lineend) || str->in(y, whitespace)))
-			y = nc.prev();
-		nc = nc.findchar(Lineend, 1);
-		if(nc != nil)
-			b.set(nc.mvskip(Lineend+whitespace));
-		else
-			b.set(text.cursor(0));
-		jump = 1;
+	'(' or
 	')' =>
-		Lineend: con ".!?";
-		nc := cr.clone();
-		nc = nc.mvskip("^"+Lineend);
-		nc = nc.mvskip(Lineend+whitespace);
-		b.set(nc);
+		prev := x == '(';
+		while(num--) {
+			nc := b.dst.mvsentence(prev);
+			b.beepset(nc);
+			if(nc == nil)
+				break;
+		}
 		jump = 1;
-	'{' => 
-		nc := cr.clone();
-		y := nc.prev();
-		while(y == '\n')
-			y = nc.prev();
-		nc = nc.findstr("\n\n", 1);
-		if(nc == nil)
-			nc = text.cursor(0);
-		else
-			nc.next();
-		b.set(nc);
-		jump = 1;
+	'{' or
 	'}' =>
-		nc := cr.clone();
-		y := nc.char();
-		while(y == '\n')
-			y = nc.next();
-		nc = nc.findstr("\n\n", 0);
-		if(nc == nil)
-			nc = text.end();
-		else
-			nc.next();
-		b.set(nc);
+		prev := x == '{';
+		while(num--) {
+			nc := b.dst.mvparagraph(prev);
+			b.beepset(nc);
+			if(nc == nil)
+				break;
+		}
 		jump = 1;
 	'`' =>
 		b.set(xmarkget(c.xget()));
@@ -381,11 +366,38 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 		kb->Up or
 		'k' =>		b.beepset(cr.mvline(-num, colkeep));
 		kb->APP|'b' or
-		kb->Pgup =>	b.beepset(cr.mvline(-max(1, tklinesvisible()), colkeep));
+		kb->Pgup =>	b.beepset(cr.mvline(-num*max(1, tklinesvisible()), colkeep));
 		kb->APP|'f' or
-		kb->Pgdown =>	b.beepset(cr.mvline(+max(1, tklinesvisible()), colkeep));
-		kb->APP|'u' =>	b.beepset(cr.mvline(-max(1, tklinesvisible()/2), colkeep));
-		kb->APP|'d' =>	b.beepset(cr.mvline(+max(1, tklinesvisible()/2), colkeep));
+		kb->Pgdown =>	b.beepset(cr.mvline(+num*max(1, tklinesvisible()), colkeep));
+		kb->APP|'u' =>	b.beepset(cr.mvline(-num*max(1, tklinesvisible()/2), colkeep));
+		kb->APP|'d' =>	b.beepset(cr.mvline(+num*max(1, tklinesvisible()/2), colkeep));
+		kb->APP|'y' =>
+			ps := tkvisibletop();
+			if(ps.l <= 1 && ps.c == 0)
+				break;
+			l := ps.l-1;
+			# change one line at a time to tk doesn't center location
+			while(num-- && l >= 1)
+				tkcmd(sprint(".t.text see %d.0; update", l--));
+			pe := tkvisiblebottom();
+			nc := cr;
+			if(Pos.cmp(nc.pos, pe) > 0)
+				nc = text.pos(Pos (pe.l, 0));
+			b.set(nc);
+		kb->APP|'e' =>
+			pe := tkvisiblebottom();
+			nl := text.lines();
+			if(pe.l >= nl)
+				break;
+			l := pe.l+1;
+			# change one line at a time to tk doesn't center location
+			while(num-- && l <= nl)
+				tkcmd(sprint(".t.text see %d.0; update", l++));
+			ps := tkvisibletop();
+			nc := cr;
+			if(Pos.cmp(nc.pos, ps) < 0)
+				nc = text.pos(ps);
+			b.set(nc);
 		* =>
 			xabort(sprint("bad command %c", x));
 		}
@@ -430,9 +442,8 @@ visual(cc: ref Cmd)
 	c := cc.clone();
 	c.xgetnum1();
 
-	(vs, ve) := Cursor.order(visualstart, cursor);
-	if(mode == Visualline)
-		ve = ve.mvlineend(1);
+	(vs, ve) := visualrange();
+	say('i', sprint("visual, vs %s, ve %s", vs.text(), ve.text()));
 
 	case x := c.xget() {
 	kb->Esc =>
@@ -477,7 +488,8 @@ visual(cc: ref Cmd)
 		* =>
 			c = cc.clone();
 			move(c, 1, Setjump, ce := cursor.clone());
-			visualmoved(vs, ve, ce);
+			visualend = ce.clone();
+			visualset();
 			cursorset(ce);
 			*cc = *c;
 			xconsumed();
@@ -492,6 +504,7 @@ visual(cc: ref Cmd)
 				redraw();
 			'o' =>
 				(cursor, visualstart) = ret(visualstart, cursor);
+				visualset();
 				cursorset(cursor);
 			'"' =>
 				xregset(c.xget());
@@ -509,7 +522,8 @@ visual(cc: ref Cmd)
 			* =>
 				c = cc.clone();
 				move(c, 1, Setjump, ce := cursor.clone());
-				visualmoved(vs, ve, ce);
+				visualend = ce.clone();
+				visualset();
 				cursorset(ce);
 			}
 			*cc = *c;
@@ -520,23 +534,6 @@ visual(cc: ref Cmd)
 	}
 	*cc = *c;
 	xchange();
-}
-
-visualmoved(vs, ve, nc: ref Cursor)
-{
-	if(mode == Visualline) {
-		if(Cursor.cmp(visualstart, nc) < 0) {
-			vs = visualstart = visualstart.mvcol(0);
-			nc = nc.mvlineend(0);
-			ve = nc.mvlineend(1);
-		} else {
-			vs = nc = nc.mvcol(0);
-			visualstart = visualstart.mvlineend(0);
-			ve = visualstart.mvlineend(1);
-		}
-		selectionset(vs.pos, ve.pos);
-	} else
-		visualset(nc);
 }
 
 commandmove(c: ref Cmd, num1, end: int): (int, ref Cursor)
@@ -591,12 +588,20 @@ command(cc: ref Cmd)
 		s := xregget(register);
 		if(s[len s-1] == '\n')
 			cs = cs.mvlineend(1);
-		textins(Cchange|Csetcursorlo, cs, s);
+		else
+			cs = cs.mvchar(+1);
+		r: string;
+		while(num1--)
+			r += s;
+		textins(Cchange|Csetcursorlo, cs, r);
 	'P' =>
 		s := xregget(register);
 		if(s[len s-1] == '\n')
 			cursorset(cursor.mvcol(0));
-		textins(Cchange, nil, s);
+		r: string;
+		while(num1--)
+			r += s;
+		textins(Cchange, nil, r);
 	'<' or
 	'>' =>
 		(num2, ce) := commandmove(c, num1, x);
@@ -732,16 +737,15 @@ command(cc: ref Cmd)
 				}
 		'q' =>
 			recordq(c);
-		'v' =>
-			modeset(Visual);
-			visualstart = cursor.clone();
-			visualset(cursor);
+		'v' or
 		'V' =>
-			modeset(Visualline);
-			visualstart = cursor.mvcol(0);
-			visualset(cursor.mvlineend(1));
-			cursorset(cursor.mvlineend(0));
-
+			if(x == 'v')
+				modeset(Visual);
+			else
+				modeset(Visualline);
+			visualstart = cursor.clone();
+			visualend = visualstart.clone();
+			visualset();
 		* =>
 			case x {
 			'c' =>
@@ -755,15 +759,11 @@ command(cc: ref Cmd)
 				modeset(Insert);
 			's' =>
 				cs = cursor.clone();
-				ce := cursor.clone();
-				if(cs.char() == '\n' && cs.pos.c != 0)
-					cs.prev();
-				else if(cs.char() != '\n')
-					ce.next();
+				ce := cs.mvchar(+num1);
 				textdel(Cchange|Csetcursorlo|Csetreg, cs, ce);
 				modeset(Insert);
 			'S' =>
-				textdel(Cchange|Csetcursorlo|Csetreg, cursor.mvcol(0), cursor.mvlineend(0));
+				textdel(Cchange|Csetcursorlo|Csetreg, cursor.mvcol(0), cursor.mvline(num1-1, Colpastnewline));
 				modeset(Insert);
 			'i' =>
 				modeset(Insert);
@@ -788,27 +788,6 @@ command(cc: ref Cmd)
 				modeset(Replace);
 			'"' =>
 				xregset(c.xget());
-			kb->APP|'y' =>
-				(a, b) := tkvisible();
-				if(a.l <= 1)
-					break;
-				tkcmd(sprint(".t.text see %d.0; update", a.l-1));
-				(nil, b) = tkvisible();
-				while(cursor.pos.l >= a.l-1 && (cursor.pos.l > b.l || (cursor.pos.l == b.l && cursor.pos.c > b.c))) {
-					cursorset0(text.pos(Pos(cursor.pos.l-1, cursor.pos.c)), 0);
-					(nil, b) = tkvisible();
-				}
-			kb->APP|'e' =>
-				(a, b) := tkvisible();
-				nl := text.lines();
-				if(b.l >= nl)
-					break;
-				tkcmd(sprint(".t.text see %d.0; .t.text see %d.0; update", b.l+1, a.l+1));
-				(a, nil) = tkvisible();
-				while(cursor.pos.l <= b.l+1 && (cursor.pos.l < a.l || (cursor.pos.l == a.l && cursor.pos.c < a.c))) {
-					cursorset0(text.pos(Pos(cursor.pos.l+1, cursor.pos.c)), 0);
-					(a, nil) = tkvisible();
-				}
 			* =>
 				c = cc.clone();
 				move(c, 1, Setjump, ce := cursor.clone());

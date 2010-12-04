@@ -102,7 +102,7 @@ ex0(excmd: string, dot: ref Cursor): string
 	if(cedef == nil)
 		cedef = csdef.mvlineend(1);
 
-	case x := exgetc(c) {
+	case x := c.get() {
 	'!' =>
 		# :!command		run command
 		# :addr!command		replace line with output from command (that gets the original line as input)
@@ -276,7 +276,13 @@ ex0(excmd: string, dot: ref Cursor): string
 			exerror(sprint("bad ex command: %q", excmd));
 		}
 	'@' =>
-		macro(1, xregget(exgetc(c)));
+		r := exgetc(c);
+		exempty(c);
+		s: string;
+		(s, err) = regget(r);
+		if(err != nil)
+			exerror(err);
+		macro(1, s);
 	'm' =>
 		# move, [range]m addr
 		exreadsep(c, SepRequired);
@@ -376,22 +382,41 @@ ex0(excmd: string, dot: ref Cursor): string
 			indent(csdef, cedef, x=='<');
 	'j' =>
 		exclam := optget(c, '!');
+		cedef = cedef.mvlineend(1);  # two lines at minimum
 
 		if(c.more()) {
 			exreadsep(c, SepOptional);
-			n := c.getint(1);
+			count := max(2, c.getint(2));
 			exempty(c);
 			d := dot;
 			if(ce != nil)
 				d = ce;
-			join(d.mvcol(0), d.mvline(n-1, Colpastnewline), !exclam);
+			join(d.mvcol(0), d.mvline(count-1, Colpastnewline), !exclam);
 			cursorset(d.mvfirst());
 		} else {
 			join(csdef, cedef, !exclam);
 			cursorset(csdef.mvfirst());
 		}
+	'D' =>
+		# toggle debug string
+		exreadsep(c, SepOptional);
+		s := exrem(c, RemNonempty);
+		for(i := 0; i < len s; i++)
+			case y := s[i] {
+			'-' =>		debug = array[128] of {* => 0};
+			'+' =>		debug = array[128] of {* => 1};
+			'a' to 'z' =>	debug[y] = !debug[y];
+			* =>	exerror(sprint("bad debug char %c", y));
+			}
 	* =>
-		return sprint("bad ex command: %q", excmd);
+		if(x >= 0)
+			c.unget();
+		exempty(c);
+		if(ce != nil)
+			cs = nil;
+		if(cs == nil)
+			break;
+		cursorset(cs);
 	}
 	return nil;
 }
@@ -410,7 +435,8 @@ Address:
 		'$' =>	dot = text.pos(Pos (text.lines(), 0));
 		'0' to '9' =>
 			c.unget();
-			dot = text.pos(Pos (max(1, int c.getint(0)), 0));
+			line := int c.getint(0);
+			dot = text.pos(Pos (max(1, line), 0));
 		'+' or
 		'-' =>
 			mult := 1;
@@ -426,7 +452,7 @@ Address:
 			(re, err) = regex->compile(pat, 0);
 			if(err != nil)
 				return (nil, "bad regex: "+err);
-			cs := search(x == '?', 0, re, dot);
+			(cs, nil) := search(x == '?', 0, re, dot);
 			if(cs == nil)
 				return (nil, sprint("pattern %q not found", pat));
 			dot = cs;

@@ -60,10 +60,12 @@ swapcase(s: string): string
 join(cs, ce: ref Cursor, space: int)
 {
 	s := text.get(cs, ce);
-say('d', sprint("join, s %q", s));
 
 	r := "";
-	for(i := 0; i < len s; i++)
+	n := len s;
+	if(n >= 0 && s[n-1] == '\n')
+		--n;
+	for(i := 0; i < n; i++)
 		case s[i] {
 		'\n' =>
 			if(space)
@@ -73,10 +75,13 @@ say('d', sprint("join, s %q", s));
 		* =>
 			r[len r] = s[i];
 		}
+	if(n == len s-1)
+		r[len r] = '\n';
 
 	textdel(Cchange|Csetcursorlo, cs, ce);
 	textins(Cchange, nil, r);
 }
+
 hasnewline(s: string): int
 {
 	for(i := 0; i < len s; i++)
@@ -84,4 +89,3 @@ hasnewline(s: string): int
 			return 1;
 	return 0;
 }
-
