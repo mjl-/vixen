@@ -79,7 +79,7 @@ exreadarg(c: ref Cmd): string
 
 	cmd := exrem(c, RemNonempty);
 	if(filt)
-		(res, err) := filter(cmd, "");
+		(res, err) := filter(cmd, "", 0);
 	else
 		(res, err) = readfile(cmd);
 	if(err != nil)
@@ -121,7 +121,7 @@ ex0(excmd: string, dot: ref Cursor): string
 			txt := text.get(cs, ce);
 			say('x', sprint("input is: %q", txt));
 			res: string;
-			(res, err) = filter(cmd, txt);
+			(res, err) = filter(cmd, txt, 1);
 			if(err != nil) {
 				statuswarn("error: "+err);
 				res = err;
@@ -183,7 +183,7 @@ ex0(excmd: string, dot: ref Cursor): string
 				append = 1;
 				ofilename = ofilename[len ">>":];
 			} else if(filename == nil)
-				filename = ofilename;
+				filenameset(ofilename);
 		} else
 			ofilename = filename;
 
@@ -322,7 +322,7 @@ ex0(excmd: string, dot: ref Cursor): string
 				statuswarn(filename);
 		} else {
 			exreadsep(c, SepRequired);
-			filename = exrem(c, RemNonempty);
+			filenameset(exrem(c, RemNonempty));
 			filefd = nil;
 			statusset();
 		}
@@ -408,6 +408,27 @@ ex0(excmd: string, dot: ref Cursor): string
 			'a' to 'z' =>	debug[y] = !debug[y];
 			* =>	exerror(sprint("bad debug char %c", y));
 			}
+	'b' =>
+		s: string;
+		if(!c.more()) {
+			(s, err) = regget('!');
+			if(err == nil && s == nil)
+				err = "no previous command";
+		} else {
+			exreadsep(c, SepRequired);
+			s = exrem(c, RemNonempty);
+		}
+		r: string;
+		if(err == nil)
+			(r, err) = filter(s, "", 1);
+		say('x', sprint(":b on %q, err %q, r %q", s, err, r));
+		if(err != nil)
+			exerror(err);
+		plumb(r, "newtext");
+		err = regput('!', s);
+		if(err != nil)
+			exerror(err);
+		
 	* =>
 		if(x >= 0)
 			c.unget();
@@ -416,7 +437,7 @@ ex0(excmd: string, dot: ref Cursor): string
 			cs = nil;
 		if(cs == nil)
 			break;
-		cursorset(cs);
+		cursorset(cs.mvfirst());
 	}
 	return nil;
 }

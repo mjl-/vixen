@@ -9,8 +9,10 @@ vixen \- vi-like text editor
 ] [
 .B -c
 .I macro
+] [
+.B -i
 ]
-.I file
+.I path
 .SH DESCRIPTION
 .I Vixen
 is a vi-like text editor for Inferno.
@@ -18,8 +20,11 @@ is a vi-like text editor for Inferno.
 .SS Options
 .I Vixen
 edits
-.IR file ,
-or a new buffer if no file is given.
+.IR path ,
+or a new buffer if no path is given.
+If
+.I path
+is a directory, nothing is read.
 .TP
 .BI -d " debug"
 Print debug messages to standard error.
@@ -35,6 +40,14 @@ enables all debug printing.
 After startup, before giving control to the user,
 .I macro
 is executed.
+.TP
+.B -i
+Reads initial buffer from standard input instead of from file.  This can be used to start
+.I vixen
+with a directory as
+.I filename
+and pipe the output of a command to it.
+
 
 .SS Modes
 .I Vixen
@@ -67,7 +80,7 @@ mode.
 .SS User interface
 The main text
 .I window
-is a view of the current buffer.
+is a view of the current buffer.  The title contains the name ``vixen'' and the absolute path of the file being edited.
 .I Vixen
 makes sure the insertion cursor is always visible, unless the view is scrolled by the scrollbar.
 Under the window is the status bar, it contains the current mode, the buffer's file name (or that none has been set yet), the number of lines and characters in the file, the current insertion position, the characters that have been collected as a command, and optionally an error message.  When entering line-based commands, such as
@@ -127,7 +140,7 @@ command.
 .PP
 Registers:
 .TP
-.B \(Dq
+.B "
 Holds text removed during last deletion.
 .TP
 .B \.
@@ -146,6 +159,13 @@ Pattern of last text search.
 .B *
 Contents of snarf buffer.
 .TP
+.B !
+Command last executed by
+.I ex
+command
+.B :b
+.IR command .
+.TP
 .B a-z
 Registers available to user.
 .TP
@@ -154,7 +174,7 @@ Aliases for registers
 .IR a-z .
 Writes to these registers append to the lower cased registers, instead of writing them.
 
-.SS Mark
+.SS Marks
 Marks are
 .I positions
 in the file.  They can be set by the
@@ -418,9 +438,6 @@ Unindent/indent text, removing or inserting tabs.  Empty lines are kept empty.
 Replace all selected characters by as many
 .IR char 's.
 .TP
-.B z
-Plumb the selected text.
-.TP
 .B !
 Start
 .I ex
@@ -470,6 +487,9 @@ mode.
 Change (substitute, replace) all lines that are part of the selection:  Delete them and switch to
 .I insert
 mode.
+.TP
+.BI p " or " P
+Plumb text.
 
 .SS Commands
 Non-visual commands are very similar to the visual commands.  Instead of operating on visually selected text, they often operate on the line with the insertion cursor.  Many of the commands accept a motion command as modifier, the text range to operate on is then from the cursor to where the motion command moves (the motion command is interpreted relative to the cursor).
@@ -683,6 +703,25 @@ or stop recording.
 Use register
 .I reg
 for the next command.
+.TP
+.B gP
+Plumb pattern under cursor.  Pattern is path optionally followed by a semicolon and an
+.I ex
+address, e.g. a line number.  The start of the pattern is looked for before the cursor too.
+.TP
+.B gpp " or " <n>gp<motion>
+Plumb line or motion range.
+.TP
+.B gb
+Equivalent to
+.I ex
+command
+.BR b :
+execute the command in register
+.I !
+and plumb the standard output and standard error as message
+.I kind
+`newtext'.
 
 .SS "Ex commands"
 .I "Ex commands"
@@ -905,6 +944,48 @@ was specified, newlines are removed instead of replaced by spaces.
 Toggle debug settings for
 .IR chars ,
 which must be one or more chars of:  a-z, or - (disable all) or + (enable all).
+.TP
+.B "b [command]"
+.I Build
+by executing
+.IR command .
+The output (both standard output and standard error) are plumbed with
+.I kind
+`newtext', with only the current working directory set.  This the text to be sent to a
+.I vixen
+that gathers output for that directory, a mechanism similar to that in
+.IR acme (1).
+If
+.I command
+is absent, the command previously executed with
+.B b
+is executed again.  This command is available in register
+.IR !
+and is set to
+.I `mk'
+by default.
+Also see
+.RI non- ex
+command
+.BR gb .
+
+.SS Plumbing
+Plumbing is supported through the non-visual
+.BR gP , gpp " and " gp<motion>
+commands, and the (identical) visual commands
+.BR gp " and " gP .
+Quick write and compile cycles are supported by the
+.B gb
+and
+.I ex'
+.B ":b [command]"
+commands.
+.I Vixen
+uses a helper program
+.I vixenplumb
+(not otherwise documented)
+to keep track of which files are being edited, and routes plumb requests accordingly or starts a new
+.IR vixen .
 
 .SS Missing features
 .I Vixen
@@ -919,7 +1000,7 @@ and
 for scrolling the window to place the cursor at the middle, top and bottom of the window.
 
 .PP
-Other implementations treat motion commands differently based on the command they are executed with, e.g.
+Other implementations treat some motion commands differently based on the command they are executed with, e.g.
 .B cw
 is actually interpreted as ``delete to end of word'', i.e. more like
 .BR ce .

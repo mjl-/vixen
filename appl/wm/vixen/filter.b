@@ -1,9 +1,11 @@
-filter1(cmd: string, fd0, fd1: ref Sys->FD, resc: chan of (string, string), pidc: chan of int)
+filter1(cmd: string, fd0, fd1: ref Sys->FD, stderr: int, resc: chan of (string, string), pidc: chan of int)
 {
 	pidc <-= pid();
 	sys->pctl(Sys->NEWFD|Sys->FORKNS|Sys->FORKENV, list of {fd0.fd, fd1.fd, 2});
 	sys->dup(fd0.fd, 0);
 	sys->dup(fd1.fd, 1);
+	if(stderr)
+		sys->dup(fd1.fd, 2);
 	fd0 = fd1 = nil;
 	err := sh->system(drawcontext, cmd);
 	if(err != nil)
@@ -39,7 +41,7 @@ reader(fd: ref Sys->FD, resc: chan of (string, string), pidc: chan of int)
 	}
 }
 
-filter0(cmd, input: string, outc: chan of (string, string))
+filter0(cmd, input: string, stderr: int, outc: chan of (string, string))
 {
 	sys->pctl(Sys->NEWFD, list of {2});
 	fd0 := array[2] of ref Sys->FD;
@@ -54,7 +56,7 @@ filter0(cmd, input: string, outc: chan of (string, string))
 	wpid := <-pidc;
 	spawn reader(fd1[1], resc, pidc);
 	rpid := <-pidc;
-	spawn filter1(cmd, fd0[0], fd1[0], resc, pidc);
+	spawn filter1(cmd, fd0[0], fd1[0], stderr, resc, pidc);
 	fpid := <-pidc;
 	fd0 = fd1 = nil;
 
@@ -65,9 +67,8 @@ filter0(cmd, input: string, outc: chan of (string, string))
 	outc <-= (res, err);
 }
 
-filter(cmd, input: string): (string, string)
+filter(cmd, input: string, stderr: int): (string, string)
 {
-	spawn filter0(cmd, input, outc := chan of (string, string));
+	spawn filter0(cmd, input, stderr, outc := chan of (string, string));
 	return <-outc;
 }
-

@@ -467,8 +467,6 @@ visual(cc: ref Cmd)
 		if(y == '\n')
 			mv = Csetcursorhi;
 		textrepl(Cchange|mv, vs, ve, s);
-	'z' =>
-		plumb(text.get(vs, ve));
 	'!' =>
 		ex(xeditget(c, ":'<,'>!"));
 	':' =>
@@ -485,6 +483,9 @@ visual(cc: ref Cmd)
 			textrepl(Cchange|Csetcursorlo, vs, ve, str->tolower(text.get(vs, ve)));
 		'U' =>
 			textrepl(Cchange|Csetcursorlo, vs, ve, str->toupper(text.get(vs, ve)));
+		'p' or
+		'P' =>
+			plumb(text.get(vs, ve), nil);
 		* =>
 			c = cc.clone();
 			move(c, 1, Setjump, ce := cursor.clone());
@@ -687,6 +688,28 @@ command(cc: ref Cmd)
 			modeset(Insert);
 			*cc = *c;
 			xconsumed();
+		'b' =>
+			s := xregget('!');
+			(r, err) := filter(s, "", 1);
+			say('i', sprint("gb, s %q, err %q, r %q", s, err, r));
+			if(err != nil)
+				xabort(err);
+			plumb(r, "newtext");
+		'p' =>
+			(num2, ce) := commandmove(c, num1, 'p');
+			if(ce == nil)
+				ce = cursor.mvline(num1*num2-1, Colend);
+			s := text.get(cs, ce);
+			say('i', sprint("plumbing %q", s));
+			plumb(s, nil);
+		'P' =>
+			ce: ref Cursor;
+			(cs, ce) = cs.pathpattern(1);
+			if(cs == nil)
+				xabort("no path under cursor");
+			s := text.get(cs, ce);
+			say('i', sprint("plumbing %q", s));
+			plumb(s, nil);
 		* =>
 			c = cc.clone();
 			move(c, 1, Setjump, ce := cursor.clone());

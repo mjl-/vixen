@@ -1,0 +1,17 @@
+<../../mkconfig
+
+TARG=\
+	vixenplumb.dis\
+
+SYSMODULES=\
+	arg.m\
+	bufio.m\
+	draw.m\
+	plumbmsg.m\
+	string.m\
+	sys.m\
+	util0.m\
+
+DISBIN=$ROOT/dis
+
+<$ROOT/mkfiles/mkdis

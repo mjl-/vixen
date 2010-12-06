@@ -22,6 +22,8 @@ include "regex.m";
 include "plumbmsg.m";
 	plumbmsg: Plumbmsg;
 	Msg: import plumbmsg;
+include "names.m";
+	names: Names;
 include "sh.m";
 	sh: Sh;
 include "util0.m";
@@ -41,6 +43,8 @@ Vixen: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
+
+iflag: int;
 
 # 't' for tk events
 # 'k' for tk commands
@@ -115,6 +119,8 @@ b3prev: ref Pos;  # previous position while button3 down
 statusvisible := 1;  # whether tk frame with status label is visible (and edit entry is not)
 
 highlightstart, highlightend: ref Cursor;  # range to highlight for search match, can be nil
+
+vpfd: ref Sys->FD;  # fd to /chan/vixenplumb, for handling plumbing
 
 plumbed: int;
 top: ref Tk->Toplevel;
@@ -204,6 +210,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	tkclient = load Tkclient Tkclient->PATH;
 	regex = load Regex Regex->PATH;
 	plumbmsg = load Plumbmsg Plumbmsg->PATH;
+	names = load Names Names->PATH;
 	sh = load Sh Sh->PATH;
 	sh->initialise();
 	util = load Util0 Util0->PATH;
@@ -212,7 +219,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	sys->pctl(Sys->NEWPGRP, nil);
 
 	arg->init(args);
-	arg->setusage(arg->progname()+" [-d debug] [-c macro] [filename]");
+	arg->setusage(arg->progname()+" [-d debug] [-c macro] [-i] path");
 	while((c := arg->opt()) != 0)
 		case c {
 		'c' =>	startupmacro = arg->arg();
@@ -224,6 +231,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 				'a' to 'z' =>	debug[x]++;
 				* =>		fail(sprint("debug char %c not ascii", s[i]));
 				}
+		'i' =>	iflag++;
 		* =>	arg->usage();
 		}
 	args = arg->argv();
@@ -235,6 +243,19 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 	plumbed = plumbmsg->init(1, nil, 0) >= 0;
 
+	vpc := chan of (string, string);
+	vpfd = sys->open("/chan/vixenplumb", Sys->ORDWR);
+	if(vpfd != nil)
+		spawn vixenplumbreader(vpfd, vpc);
+	else
+		warn(sprint("no plumbing, open /chan/vixenplumb: %r"));
+
+	text = text.new();
+	cursor = text.pos(Pos(1, 0));
+	xmarkput('`', cursor);
+	cmdcur = Cmd.new();
+	xregput('!', "mk");
+
 	openerr: string;
 	if(filename != nil) {
 		filefd = sys->open(filename, Sys->ORDWR);
@@ -243,15 +264,13 @@ init(ctxt: ref Draw->Context, args: list of string)
 		else {
 			ok: int;
 			(ok, filestat) = sys->fstat(filefd);
-			if(ok < 0)
+			if(ok < 0) {
 				openerr = sprint("stat: %r");
+				filefd = nil;
+			}
 		}
 		# if filefd is nil, we warn that this is a new file when tk is initialized
 	}
-	text = text.new();
-	cursor = text.pos(Pos(1, 0));
-	xmarkput('`', cursor);
-	cmdcur = Cmd.new();
 
 	tkclient->init();
 	(top, wmctl) = tkclient->toplevel(ctxt, "", "vixen", Tkclient->Appl);
@@ -266,13 +285,21 @@ init(ctxt: ref Draw->Context, args: list of string)
 	tkselcolor(Normal);
 	tkbinds();
 
+	if(filename != nil)
+		filenameset(filename);
+
 	if(filename != nil && filefd == nil) {
-		if(sys->stat(filename).t0 < 0)
+		(ok, dir) := sys->stat(filename);
+		if(ok < 0)
 			statuswarn(sprint("new file %q", filename));
+		else if(dir.mode & Sys->DMDIR)
+			statuswarn(sprint("%q is directory", filename));
 		else
 			fail(sprint("open %q: %s", filename, openerr));
 	}
-	if(filefd != nil)
+	if(iflag)
+		textfill(sys->fildes(0));
+	else if(filefd != nil)
 		textfill(filefd);
 	tkaddeof();
 	up();
@@ -350,19 +377,16 @@ init(ctxt: ref Draw->Context, args: list of string)
 			say('t', sprint("b3up at char %s", pos.text()));
 			if(Pos.eq(*b3start, pos)) {
 				cx := text.pos(pos);
-				(cs, ce) := cx.word();
-				
-				if(cs == nil && cx.char() == '\n')
-					(cs, ce) = (cx.mvcol(0), cx.mvlineend(0));
+				(cs, ce) := cx.pathpattern(0);
 				if(cs == nil)
-					statuswarn("not a word");
+					statuswarn("not a path");
 				else
-					plumb(text.get(cs, ce));
+					plumb(text.get(cs, ce), nil);
 			} else {
 				cs := text.pos(*b3start);
 				ce := text.pos(pos);
 				(cs, ce) = Cursor.order(cs, ce);
-				plumb(text.get(cs, ce));
+				plumb(text.get(cs, ce), nil);
 			}
 			b3start = b3prev = nil;
 			case mode {
@@ -397,6 +421,57 @@ init(ctxt: ref Draw->Context, args: list of string)
 		say('t', sprint("edit: %q", e));
 		editinput(e);
 		up();
+
+	(s, err) := <-vpc =>
+		say('d', sprint("vpc, s %q, err %q", s, err));
+		if(err != nil) {
+			statuswarn("vixenplumb failed: "+err);
+			continue;
+		}
+		if(iflag) {
+			textins(Cchange, text.end(), s);
+		} else {
+			nc: ref Cursor;
+			(nc, err) = address(Cmd.mk(s), cursor);
+			if(err != nil) {
+				statuswarn(sprint("bad address from vixenplumb: %q: %s", s, err));
+			} else {
+				cursorset(nc);
+				statuswarn(sprint("new address from vixenplumb: %s", s));
+			}
+		}
+		tkclient->wmctl(top, "raise");
+		tkclient->wmctl(top, "kbdfocus 1");
+		tkclient->onscreen(top, "onscreen");
+		up();
+	}
+}
+
+filenameset(s: string)
+{
+	# xxx other things.
+	filename = names->cleanname(names->rooted(workdir(), s));
+	tkclient->settitle(top, "vixen "+filename);
+	if(vpfd != nil) {
+		if(sys->fprint(vpfd, "%s", filename) < 0)
+			statuswarn(sprint("telling vixenplumb about filename: %r"));
+	}
+}
+
+vixenplumbreader(fd: ref Sys->FD, vpc: chan of (string, string))
+{
+	buf := array[8*1024] of byte;  # Iomax in vixenplumb
+	for(;;) {
+		n := sys->read(fd, buf, len buf);
+		if(n <= 0) {
+			err := "eof";
+			if(n < 0)
+				err = sprint("%r");
+			vpc <-= (nil, err);
+			break;
+		}
+		s := string buf[:n];
+		vpc <-= (s, nil);
 	}
 }
 
@@ -597,15 +672,16 @@ say('e', sprint("complete, pre %q, path %q, f %q", pre, path, f));
 }
 
 
-plumb(s: string)
+plumb(s, kind: string)
 {
 	if(!plumbed)
 		return statuswarn("cannot plumb");
-	msg := ref Msg("vixen", "", sys->fd2path(sys->open(".", Sys->OREAD)), "", "", array of byte s);
+	if(kind == nil)
+		kind = "text";
+	msg := ref Msg("vixen", "", workdir(), kind, "", array of byte s);
 	say('d', sprint("plumbing %s", string msg.pack()));
 	msg.send();
 }
-
 
 changesave()
 {
@@ -757,7 +833,8 @@ xregcanput(c: int)
 	'.' or
 	'"' or
 	'A' to 'Z' or
-	'*' =>	return;
+	'*' or
+	'!' =>	return;
 	'%' =>	xabort("register % is read-only");
 	* =>	xabort(sprint("bad register %c", c));
 	}
@@ -778,7 +855,8 @@ regget(c: int): (string, string)
 	'/' or
 	':' or
 	'.' or
-	'"' =>		r = registers[c];
+	'"' or
+	'!' =>		r = registers[c];
 	'A' to 'Z' =>	r = registers[c-'A'+'a'];
 	'%' =>		r = filename;
 	'*' =>		r = tkclient->snarfget();
@@ -794,7 +872,8 @@ regput(c: int, s: string): string
 	'/' or
 	':' or
 	'.' or
-	'"' =>
+	'"' or
+	'!' =>
 		registers[c] = s;
 	'A' to 'Z' =>
 		registers[c-'A'+'a'] += s;
@@ -927,7 +1006,7 @@ textrepl(rec: int, a, b: ref Cursor, s: string)
 # and whether the last change register should be set.
 textdel(rec: int, a, b: ref Cursor)
 {
-	highlightstart = highlightend = nil;
+	tkhighlightclear();
 
 	if(a == nil)
 		a = cursor;
@@ -1052,7 +1131,7 @@ Change:
 
 textins(rec: int, c: ref Cursor, s: string)
 {
-	highlightstart = highlightend = nil;
+	tkhighlightclear();
 
 	if(c == nil)
 		c = cursor;
@@ -1271,7 +1350,7 @@ statusset()
 	if(filename == nil)
 		s += "(no filename)";
 	else
-		s += sprint("%q", filename);
+		s += sprint("%q", names->basename(filename, nil));
 	s += sprint(", %4d lines, %5d chars, pos %s", text.lines(), text.chars(), cursor.pos.text());
 	if(cmdcur.rem() != nil)
 		s += ", "+cmdcur.rem();
@@ -1308,7 +1387,8 @@ redraw()
 		visualset();
 	}
 	cursorset(cursor);
-	tkhighlight(highlightstart, highlightend);
+	if(highlightstart != nil)
+		tkhighlight(highlightstart, highlightend);
 	tkcmd(sprint(".t.text see %s", spos.text()));
 }
 

@@ -35,6 +35,7 @@ Cursor: adt {
 	mvskip:		fn(c: self ref Cursor, cl: string): ref Cursor;
 
 	word:		fn(c: self ref Cursor): (ref Cursor, ref Cursor);
+	pathpattern:	fn(c: self ref Cursor, search: int): (ref Cursor, ref Cursor);
 	findchar:	fn(c: self ref Cursor, cl: string, rev: int): ref Cursor;
 	findstr:	fn(c: self ref Cursor, s: string, rev: int): ref Cursor;
 	findlinechar:	fn(c: self ref Cursor, x: int, rev: int): ref Cursor;
@@ -447,6 +448,37 @@ Cursor.word(c: self ref Cursor): (ref Cursor, ref Cursor)
 	while(x > 0 && !str->in(x, whitespaceinterpunction))
 		x = b.next();
 	return (a, b);
+}
+
+# return start & end of path and optionally pattern under cursor.
+# (nil, nil) if no path is under the cursor, or no path could be found with `search' set.
+Cursor.pathpattern(c: self ref Cursor, search: int): (ref Cursor, ref Cursor)
+{
+	# read a file:address pattern (not whole line!), also look backwards.
+	# this could be done with a vim-like text object "motion" some day.
+	Break: con " \t\n!\"'(),;<>?[]{}";
+	c = c.clone();
+	if(search)
+		c = c.mvskip(" \t\n");
+	else if(str->in(c.char(), whitespace))
+		return (nil, nil);
+	ce := c.clone();
+	for(;;) {
+		x := c.charprev();
+		if(x < 0 || has(x, Break))
+			break;
+		c.prev();
+	}
+	ncolon := 0;
+	x := ce.char();
+	for(;;) {
+		if(x < 0 || has(x, Break))
+			break;
+		if(x == ':' && ++ncolon >= 2)
+			break;
+		x = ce.next();
+	}
+	return (c, ce);
 }
 
 # move cursor forward (or backward if rev!=0) until cursor is at char from cl

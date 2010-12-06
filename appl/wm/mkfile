@@ -18,7 +18,10 @@ SYSMODULES=\
 	bufio.m\
 	draw.m\
 	keyboard.m\
+	names.m\
 	plumbmsg.m\
+	regex.m\
+	sh.m\
 	string.m\
 	sys.m\
 	tk.m\

@@ -89,3 +89,17 @@ hasnewline(s: string): int
 			return 1;
 	return 0;
 }
+
+has(c: int, s: string): int
+{
+	ns := len s;
+	for(i := 0; i < ns; i++)
+		if(c == s[i])
+			return 1;
+	return 0;
+}
+
+workdir(): string
+{
+	return sys->fd2path(sys->open(".", Sys->OREAD));
+}

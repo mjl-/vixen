@@ -1,0 +1,116 @@
+# status
+
+starting to become usable, but still has plenty bugs and may crash.
+
+
+# intro
+
+vixen is a vi-like editor for inferno.  it should be immediately
+usable if you know vi (vixen also implements some functionality
+found in vim).  useful if you don't want to learn acme (yet), or
+simply prefer vi.  vixen does try to blend in with inferno, e.g.
+by providing support for plumbing.
+
+see the manual page for more information.
+
+
+# install
+
+first, make sure you have "util" installed.
+
+change the "mkconfig" if you do not have $ROOT set.  now "mk install"
+to compile and install the files.
+
+when building from within inferno, insert SYSHOST=Inferno and ROOT=
+in the mk invocations to override the values in the mkconfig.
+
+
+# latest version
+
+the latest version can be found at:
+
+    http://www.ueber.net/code/r/vixen
+
+
+# licence & author
+
+all files are in the public domain.  this code has been written by
+mechiel lukkien, reachable at mechiel@ueber.net.
+
+
+# plumbing
+
+the plumber can be configured to pass paths (optionally followed
+by a colon and ex address, e.g. a line number) to vixen.  actually
+to a helper program called vixenplumb that starts a new vixen if
+necessary, and forwards the plumb request otherwise.  place the
+following in your $home/lib/plumbing file:
+
+	# existing files, possibly tagged by line number, go to vixen
+	kind is text
+	data matches '([.a-zA-Z0-9_/\-]+[a-zA-Z0-9_/\-])(:[0-9]+)?'
+	data isfile     $1
+	plumb to edit
+	plumb start /dis/vixenplumb.dis $file$2
+
+	# new text go to vixen, associated with a directory
+	kind is newtext
+	plumb to edit
+	plumb start /dis/vixenplumb.dis $file
+
+you will also need to modify the plumber (appl/cmd/plumber.b) to
+accept message kind "newtext" and treat it like message kind "text".
+
+for now, it seems to be necessary to start vixenplumb manually before starting any vixen and before plumbing.
+
+
+# todo
+
+- workdir should be preserved when plumbing file names.
+- don't show chars typed in insert/replace mode in the status bar.
+- eliminate a lot of the tk commands on each key stroke
+- get rid of some 'fail()'s in code.
+- separate SH's for some parts of the manual page, e.g. ex commands.
+- fix '^' and '$' in searches
+- getting b1 events can return negative locations, i.e. outside field.  should be handled.  not we crash
+- make scrolling with ^e and ^y less slow.
+- only change cursor as side effect of scrolling window for ^u ^d ^b ^f.
+- fix annoying scrolling with ^e for last line.
+- treat tab as 8 spaces when moving cursor vertically.  makes cursor appear to move less horizontally when switching between lines with and without tabs.
+- column snap could be done for virtual column positions too, e.g. end of line
+- beep should be more visible, or audible
+- error messages are sometimes cleared from the status bar too soon, need a consistent approach.
+- for ex, when requiring whitespace, be okay without whitespace but where next char is some set of special chars, with at least '/' in the set?  eg for ":w/tmp/x".
+- think of a good strategy to abort commands, especially in combination with macro execution.
+- we crash when repeating (with '.') in visual mode, eg 'jj<'.
+- undo should undo a whole @<reg> execution.  test what the behaviour of '.' in a macro is.  and if there is a difference with 'q<reg>' recorded macro's.  original vi says:  "The undo command reverses an entire macro call as a unit, if it made any changes."  but that does not say if there is something different for recorded macro's...
+- fix '*' and '#', they should search for whole words.  so before & after should be begin/end or non-text (whitespace or interpunction)
+- ':e[!] filename' command
+- :n and :p for next & prev files, allowing multiple args on the command line?  first need :e, then it should be easy.
+- registers and marks 0-9
+- ^i ^o for cycling through history of marks?
+- put into Change or Mod whether change is from insert/replace or command or ex.  perhaps also keep marks `.^ updated with undo/redo?  and other marks.  and whether buffer is dirty.
+- text objects as movements in commands.  eg 'daw' for delete 'aw', where 'aw' is one word.  similarly: 'is' inner sentence, not including whitespace.  also text objects while in visual mode to expand selection?
+- ':[range]g[!]/pattern[/]'	set cursor to line matching pattern.  if ! is specified, go to line that does not match pattern.
+- allow absence of last / in pattern on a line?  and support line offset after it.  eg /term/+1
+- to support inclusive commands, we could introduce a movement modifier that moves to next position?
+- better b3 algorithm for finding the text to plumb?
+- counts with insert commands? eg 3itest<esc> should insert test three times
+
+- variant of 'gb':  parse error messages and load "file:pattern" as marks, this is handy for fixing and editing (because marks are kept in same spot regardless of changing text before it).  would also require setting a string with a mark, to display the error message in the status bar when jumping to it.
+- more sanity checks?
+- look at strange tk misdrawing when replacing characters.  it can be seen when replacing one char.
+- make less slow, eg don't calculate Pos(ition) for Cursors by walking through the entire buffer.
+- more efficient/scalable handling of buffers (Buf, Cursor).  eg split Buf in parts of 2k chars max, or at line boundary?
+- 'U' command to undo all changes to current line of cursor?
+- tags & tag stacks?
+- commands that operate on many lines could be made to generate multiple small modifications.  now they delete+insert from first changed position to last.
+- allow interrupting execution of commands?
+- interpret keys Insert & Del as something?  e.g. toggle insert & replace mode for Insert, x or X or interrupt for Del?
+- use marks [ and ] for start & end of last insert?  or last change?
+- syntax highlighting
+- ^v prefix for taking char after literal?
+- chording?
+- execute on button2?
+- setting for disabling text wrapping?
+- allow multiple ex commands on one line, separated by pipe (|)?
