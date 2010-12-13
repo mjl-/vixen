@@ -49,11 +49,13 @@ Cursor: adt {
 
 Buf: adt {
 	s:	string;
+	nlines:	int;
 
 	new:		fn(): ref Buf;
 	get:		fn(b: self ref Buf, f, t: ref Cursor): string;
 	del:		fn(b: self ref Buf, f, t: ref Cursor): string;
 	ins:		fn(b: self ref Buf, w: ref Cursor, s: string): ref Cursor;
+	set:		fn(b: self ref Buf, s: string);
 	cursor:		fn(b: self ref Buf, o: int): ref Cursor;
 	pos:		fn(b: self ref Buf, pos: Pos): ref Cursor;
 	lines:		fn(b: self ref Buf): int;
@@ -548,7 +550,7 @@ Cursor.text(c: self ref Cursor): string
 
 Buf.new(): ref Buf
 {
-	return ref Buf ("");
+	return ref Buf ("", 1);
 }
 
 Buf.get(b: self ref Buf, f, t: ref Cursor): string
@@ -560,6 +562,9 @@ Buf.del(b: self ref Buf, f, t: ref Cursor): string
 {
 	r := b.s[f.o:t.o];
 	b.s = b.s[:f.o]+b.s[t.o:];
+	for(i := 0; i < len r; i++)
+		if(r[i] == '\n')
+			--b.nlines;
 	return r;
 }
 
@@ -568,6 +573,8 @@ Buf.ins(b: self ref Buf, cc: ref Cursor, s: string): ref Cursor
 	c := cc.clone();
 	for(i := 0; i < len s; i++) {
 		x := s[i];
+		if(x == '\n')
+			++b.nlines;
 		if(len b.s == c.o) {
 			b.s[c.o] = x;
 		} else {
@@ -580,6 +587,15 @@ Buf.ins(b: self ref Buf, cc: ref Cursor, s: string): ref Cursor
 	}
 	checkcursor(c);
 	return c;
+}
+
+Buf.set(b: self ref Buf, s: string)
+{
+	text.s = s;
+	b.nlines = 1;
+	for(i := 0; i < len s; i++)
+		if(s[i] == '\n')
+			++b.nlines;
 }
 
 Buf.cursor(b: self ref Buf, o: int): ref Cursor
@@ -619,13 +635,7 @@ Buf.pos(b: self ref Buf, pos: Pos): ref Cursor
 
 Buf.lines(b: self ref Buf): int
 {
-	ns := len b.s;
-	n := 1;
-	for(i := 0; i < ns; i++) {
-		if(b.s[i] == '\n')
-			n++;
-	}
-	return n;
+	return b.nlines;
 }
 
 Buf.chars(b: self ref Buf): int

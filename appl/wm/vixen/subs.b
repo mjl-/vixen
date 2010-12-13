@@ -64,7 +64,7 @@ reapply(repl: ref Repl, r: array of (int, int)): string
 			return sprint("bad backreference %d", i);
 		if(i < 0 || r[i].t0 < 0)
 			continue;
-		s += text.s[r[i].t0:r[i].t1];
+		s += text.str()[r[i].t0:r[i].t1];
 	}
 
 	cs := text.cursor(r[0].t0);
@@ -83,7 +83,7 @@ substitute(cs, ce: ref Cursor, src, dst: string, g: int): string
 	if(err != nil)
 		return err;
 
-	r := refind(re, text.s, cs.o, ce.o, g);
+	r := refind(re, text.str(), cs.o, ce.o, g);
 	if(r == nil)
 		return "no match";
 	for(; err == nil && r != nil; r = tl r)

@@ -339,13 +339,19 @@ init(ctxt: ref Draw->Context, args: list of string)
 		(nil, t) := sys->tokenize(txt, " ");
 		case hd t {
 		"b1down" =>
-			pos := Pos.parse(tkcmd(".t.text index "+hd tl t));
+			v := tkcmd(".t.text index "+hd tl t);
+			if(str->prefix("!", v))
+				break;
+			pos := Pos.parse(v);
 			modeset(Command0);
 			cursorset(text.pos(pos));
 			tkselectionset(cursor.pos, cursor.pos);
 			tkselcolor(Normal);
 		"b1up" =>
-			nc := text.pos(Pos.parse(tkcmd(".t.text index "+hd tl t)));
+			v := tkcmd(".t.text index "+hd tl t);
+			if(str->prefix("!", v))
+				break;
+			nc := text.pos(Pos.parse(v));
 			ranges := tkcmd(".t.text tag ranges sel");
 			if(ranges != nil) {
 				(nil, l) := sys->tokenize(ranges, " ");
@@ -363,7 +369,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 				cursorset(cursor);
 			}
 		"b3down" =>
-			pos := ref Pos.parse(tkcmd(".t.text index "+hd tl t));
+			v := tkcmd(".t.text index "+hd tl t);
+			if(str->prefix("!", v))
+				break;
+			pos := ref Pos.parse(v);
 			if(b3start == nil) {
 				tkselectionset(cursor.pos, cursor.pos);
 				tkselcolor(Green);
@@ -375,7 +384,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 			}
 			say('t', sprint("b3down at char %s", (*pos).text()));
 		"b3up" =>
-			pos := Pos.parse(tkcmd(".t.text index "+hd tl t));
+			v := tkcmd(".t.text index "+hd tl t);
+			if(str->prefix("!", v))
+				break;
+			pos := Pos.parse(v);
 			say('t', sprint("b3up at char %s", pos.text()));
 			if(Pos.eq(*b3start, pos)) {
 				cx := text.pos(pos);
@@ -383,12 +395,12 @@ init(ctxt: ref Draw->Context, args: list of string)
 				if(cs == nil)
 					statuswarn("not a path");
 				else
-					plumb(text.get(cs, ce), nil);
+					plumb(text.get(cs, ce), nil, plumbdir());
 			} else {
 				cs := text.pos(*b3start);
 				ce := text.pos(pos);
 				(cs, ce) = Cursor.order(cs, ce);
-				plumb(text.get(cs, ce), nil);
+				plumb(text.get(cs, ce), nil, plumbdir());
 			}
 			b3start = b3prev = nil;
 			case mode {
@@ -451,7 +463,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 
 filenameset(s: string)
 {
-	# xxx other things.
 	filename = names->cleanname(names->rooted(workdir(), s));
 	tkclient->settitle(top, "vixen "+filename);
 	if(vpfd != nil) {
@@ -673,14 +684,21 @@ say('e', sprint("complete, pre %q, path %q, f %q", pre, path, f));
 	return (l2a(rev(l)), nil);
 }
 
+# return directory to plumb from:  dir where filename is in, or workdir if no filename is set
+plumbdir(): string
+{
+	if(filename == nil)
+		return workdir();
+	return names->dirname(filename);
+}
 
-plumb(s, kind: string)
+plumb(s, kind, dir: string)
 {
 	if(!plumbed)
 		return statuswarn("cannot plumb");
 	if(kind == nil)
 		kind = "text";
-	msg := ref Msg("vixen", "", workdir(), kind, "", array of byte s);
+	msg := ref Msg("vixen", "", dir, kind, "", array of byte s);
 	say('d', sprint("plumbing %s", string msg.pack()));
 	msg.send();
 }
@@ -758,7 +776,7 @@ searchall(re: Regex->Re): array of (int, int)
 	l: list of (int, int);
 	o := 0;
 	for(;;) {
-		r := regex->executese(re, text.s, (o, len text.s), 1, 1);
+		r := regex->executese(re, text.str(), (o, len text.str()), 1, 1);
 		if(len r == 0 || r[0].t0 < 0)
 			break;
 		l = r[0]::l;
@@ -1102,7 +1120,8 @@ Change:
 					text.ins(a, os);
 					markfixins(a, len os);
 					tkcmd(sprint(".t.text insert %s '%s", a.pos.text(), os));
-					tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", a.pos.text(), a.pos.text(), len os));
+					if(a.o+len os >= text.chars())
+						tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", a.pos.text(), a.pos.text(), len os));
 				}
 			}
 		}
@@ -1166,7 +1185,7 @@ Change:
 			change.l = ref Mod.Ins (c.o, c.pos, s)::change.l;
 		}
 		if(rec == Cchangerepl) {
-			n := min(len s, len text.s-c.o);
+			n := min(len s, len text.str()-c.o);
 			if(n > 0) {
 				(a, b) := (text.cursor(c.o), text.cursor(c.o+n));
 				tkcmd(sprint(".t.text delete %s %s", a.pos.text(), b.pos.text()));
@@ -1190,7 +1209,8 @@ Change:
 	}
 
 	tkcmd(sprint(".t.text insert %s '%s", c.pos.text(), s));
-	tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", c.pos.text(), c.pos.text(), len s));
+	if(c.o+len s >= text.chars())
+		tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", c.pos.text(), c.pos.text(), len s));
 	nc := text.ins(c, s);
 	markfixins(c, len s);
 	case setcursor {
@@ -1216,7 +1236,7 @@ textfill(fd: ref Sys->FD): string
 		case x := b.getc() {
 		Bufio->EOF =>
 			tkcmd(".t.text insert end '"+s);
-			text.s = s;
+			text.set(s);
 			return nil;
 		bufio->ERROR =>
 			return sprint("read: %r");
@@ -1381,7 +1401,7 @@ redraw()
 {
 	(spos, nil) := tkvisible();
 	tkcmd(".t.text delete 1.0 end");
-	tkcmd(".t.text insert 1.0 '"+text.s);
+	tkcmd(".t.text insert 1.0 '"+text.str());
 	tkaddeof();
 	case mode {
 	Visual or
@@ -1396,8 +1416,10 @@ redraw()
 
 tkhighlightclear()
 {
-	tkcmd(".t.text tag remove search 1.0 end");
-	highlightstart = highlightend = nil;
+	if(highlightstart != nil) {
+		tkcmd(".t.text tag remove search 1.0 end");
+		highlightstart = highlightend = nil;
+	}
 }
 
 tkhighlight(s, e: ref Cursor)
@@ -1468,6 +1490,8 @@ tkcmd(s: string): string
 	r := tk->cmd(top, s);
 	if(r != nil && r[0] == '!')
 		warn(sprint("tkcmd: %q: %s", s, r));
+	if(r != nil)
+		say('k', " -> "+r);
 	return r;
 }
 

@@ -298,7 +298,7 @@ ex0(excmd: string, dot: ref Cursor): string
 		say('x', sprint(":b on %q, err %q, r %q", s, err, r));
 		if(err != nil)
 			exerror(err);
-		plumb(r, "newtext");
+		plumb(r, "newtext", workdir());
 		err = regput('!', s);
 		if(err != nil)
 			exerror(err);

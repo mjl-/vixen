@@ -21,7 +21,7 @@ interpx()
 {
 	say('i', sprint("interpx: mode %s, %s", modes[mode], cmdcur.text()));
 	cc := cmdcur.clone();
-	statusclear();
+	statustext = nil;
 Interp:
 	while(cc.more()) {
 		{
@@ -40,6 +40,7 @@ Interp:
 		"consumed:*" =>
 			# characters consumed, nothing special to do
 			cmdcur = cc;
+			statusset();
 		"change:*" =>
 			# a changing command finished.  store to cmdprev for repeat.
 			cmdprev = Cmd.mk(cmdcur.str());
@@ -58,7 +59,7 @@ Interp:
 			statusset();
 		"more:*" =>
 			# more input needed
-			{}
+			statusset();
 			break Interp;
 		"edit:*" =>
 			# input needed from edit entry
@@ -376,7 +377,7 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 			if(ps.l <= 1 && ps.c == 0)
 				break;
 			l := ps.l-1;
-			# change one line at a time to tk doesn't center location
+			# change one line at a time so tk doesn't center location
 			while(num-- && l >= 1)
 				tkcmd(sprint(".t.text see %d.0; update", l--));
 			pe := tkvisiblebottom();
@@ -390,7 +391,7 @@ move(cc: ref Cmd, mult, setjump: int, cr: ref Cursor)
 			if(pe.l >= nl)
 				break;
 			l := pe.l+1;
-			# change one line at a time to tk doesn't center location
+			# change one line at a time so tk doesn't center location
 			while(num-- && l <= nl)
 				tkcmd(sprint(".t.text see %d.0; update", l++));
 			ps := tkvisibletop();
@@ -487,7 +488,7 @@ visual(cc: ref Cmd)
 			textrepl(Cchange|Csetcursorlo, vs, ve, str->toupper(text.get(vs, ve)));
 		'p' or
 		'P' =>
-			plumb(text.get(vs, ve), nil);
+			plumb(text.get(vs, ve), nil, plumbdir());
 		* =>
 			c = cc.clone();
 			move(c, 1, Setjump, ce := cursor.clone());
@@ -696,14 +697,14 @@ command(cc: ref Cmd)
 			say('i', sprint("gb, s %q, err %q, r %q", s, err, r));
 			if(err != nil)
 				xabort(err);
-			plumb(r, "newtext");
+			plumb(r, "newtext", workdir());
 		'p' =>
 			(num2, ce) := commandmove(c, num1, 'p');
 			if(ce == nil)
 				ce = cursor.mvline(num1*num2-1, Colend);
 			s := text.get(cs, ce);
 			say('i', sprint("plumbing %q", s));
-			plumb(s, nil);
+			plumb(s, nil, plumbdir());
 		'P' =>
 			ce: ref Cursor;
 			(cs, ce) = cs.pathpattern(1);
@@ -711,7 +712,7 @@ command(cc: ref Cmd)
 				xabort("no path under cursor");
 			s := text.get(cs, ce);
 			say('i', sprint("plumbing %q", s));
-			plumb(s, nil);
+			plumb(s, nil, plumbdir());
 		* =>
 			c = cc.clone();
 			move(c, 1, Setjump, ce := cursor.clone());
