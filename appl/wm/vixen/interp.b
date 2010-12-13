@@ -450,6 +450,8 @@ visual(cc: ref Cmd)
 		xabort(nil);
 	'd' =>
 		textdel(Cchange|Csetcursorlo|Csetreg, vs, ve);
+	'p' =>
+		textrepl(Cchange|Csetcursorlo, vs, ve, xregget(register));
 	'y' =>
 		xregput(register, text.get(vs, ve));
 	'J' =>
@@ -800,13 +802,11 @@ command(cc: ref Cmd)
 				cursorset(cursor.mvlineend(0));
 				modeset(Insert);
 			'o' =>
-				cursorset(cursor.mvlineend(0));
 				modeset(Insert);
-				textins(Cchange|Csetcursorhi, nil, "\n");
+				textins(Cchange|Csetcursorhi, cursor.mvlineend(0), "\n");
 			'O' =>
-				cursorset(cursor.mvcol(0));
 				modeset(Insert);
-				textins(Cchange, nil, "\n");
+				textins(Cchange|Csetcursorlo, cursor.mvcol(0), "\n");
 			'R' =>
 				modeset(Replace);
 			'"' =>

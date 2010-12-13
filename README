@@ -66,13 +66,10 @@ for now, it seems to be necessary to start vixenplumb manually before starting a
 
 # todo
 
-- workdir should be preserved when plumbing file names.
 - don't show chars typed in insert/replace mode in the status bar.
 - eliminate a lot of the tk commands on each key stroke
-- get rid of some 'fail()'s in code.
-- separate SH's for some parts of the manual page, e.g. ex commands.
 - fix '^' and '$' in searches
-- getting b1 events can return negative locations, i.e. outside field.  should be handled.  not we crash
+- getting b1 events can return negative locations, i.e. outside field.  should be handled.  now we crash
 - make scrolling with ^e and ^y less slow.
 - only change cursor as side effect of scrolling window for ^u ^d ^b ^f.
 - fix annoying scrolling with ^e for last line.

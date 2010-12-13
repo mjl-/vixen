@@ -211,18 +211,6 @@ ex0(excmd: string, dot: ref Cursor): string
 		force := optget(c, '!');
 		exempty(c);
 		writemodifiedquit(force);
-	'd' =>
-		exreadsep(c, SepOptional);
-		if(c.more()) {
-			r := c.get();
-			exempty(c);
-			xregcanput(r);
-			register = r;
-		}
-		textdel(Cchange|Csetcursorlo, csdef, cedef);
-	'"' =>
-		# comment, ignore
-		{}
 	'c' =>
 		case exgetc(c) {
 		'd' =>
@@ -230,90 +218,9 @@ ex0(excmd: string, dot: ref Cursor): string
 			exreadsep(c, SepRequired);
 			if(sys->chdir(exrem(c, RemNonempty)) < 0)
 				exerror(sprint("cd: %r"));
-		'o' =>
-			# copy, :[range]co addr
-			dst: ref Cursor;
-			(dst, err) = address(c, dot);
-			if(dst == nil && err == nil)
-				err = "missing address";
-			if(err != nil)
-				exerror(err);
-			textins(Cchange|Csetcursorlo, dst.mvlineend(1), text.get(csdef, cedef));
 		* =>
 			exerror(sprint("bad ex command: %q", excmd));
 		}
-	'y' =>
-		case exgetc(c) {
-		'a' =>
-			# yank, register optional
-			if(c.more()) {
-				exreadsep(c, SepRequired);
-				r := exgetc(c);
-				exempty(c);
-				xregcanput(r);
-				register = r;
-			}
-			registers[register] = text.get(csdef, cedef);
-		* =>
-			exerror(sprint("bad ex command: %q", excmd));
-		}
-	'p' =>
-		case exgetc(c) {
-		'u' =>
-			# put, register optional
-			r := register;
-			if(c.more()) {
-				exreadsep(c, SepRequired);
-				r = exgetc(c);
-				exempty(c);
-			}
-			s: string;
-			(s, err) = regget(r);
-			if(err != nil)
-				exerror(err);
-			textins(Cchange|Csetcursorlo, csdef.mvlineend(1), s);
-		* =>
-			exerror(sprint("bad ex command: %q", excmd));
-		}
-	'@' =>
-		r := exgetc(c);
-		exempty(c);
-		s: string;
-		(s, err) = regget(r);
-		if(err != nil)
-			exerror(err);
-		macro(1, s);
-	'm' =>
-		# move, [range]m addr
-		exreadsep(c, SepRequired);
-		dst: ref Cursor;
-		(dst, err) = address(c, dot);
-		if(dst == nil && err == nil)
-			err = "missing address";
-		if(err != nil)
-			exerror(err);
-		dst = dst.mvcol(0);
-		s := text.get(csdef, cedef);
-		say('x', sprint("move, dst %s, csdef %s, cedef %s", dst.text(), csdef.text(), cedef.text()));
-		if(Cursor.cmp(dst, csdef) < 0) {
-			textdel(Cchange, csdef, cedef);
-			textins(Cchange|Csetcursorlo, dst, s);
-		} else if(Cursor.cmp(dst, cedef) >= 0) {
-			say('x', sprint("dst is %s, mvlineend(1) %s", dst.text(), dst.mvlineend(1).text()));
-			textins(Cchange, dst.mvlineend(1), s);
-			textdel(Cchange, csdef, cedef);
-			cursorset(dst);
-		} else {
-			exerror("dst range inside src range");
-		}
-	'=' =>
-		exempty(c);
-		exnorange(ce);
-		if(cs == nil)
-			n := text.lines();
-		else
-			n = cs.pos.l;
-		statuswarn(string n);  # xxx should be on empty line, not as part of statuswarn
 	'f' =>
 		if(!c.more()) {
 			if(filename == nil)
@@ -363,39 +270,6 @@ ex0(excmd: string, dot: ref Cursor): string
 				}
 			}
 			csdef = csdef.mvlineend(1);
-		}
-	'u' =>
-		exempty(c);
-		exnoaddr(cs);
-		undo();
-	'>' or
-	'<' =>
-		if(c.more()) {
-			exreadsep(c, SepOptional);
-			n := c.getint(1);
-			exempty(c);
-			d := dot;
-			if(cedef != nil)
-				d = cedef;
-			indent(d.mvcol(0), d.mvline(n-1, Colend), x=='<');
-		} else
-			indent(csdef, cedef, x=='<');
-	'j' =>
-		exclam := optget(c, '!');
-		cedef = cedef.mvlineend(1);  # two lines at minimum
-
-		if(c.more()) {
-			exreadsep(c, SepOptional);
-			count := max(2, c.getint(2));
-			exempty(c);
-			d := dot;
-			if(ce != nil)
-				d = ce;
-			join(d.mvcol(0), d.mvline(count-1, Colpastnewline), !exclam);
-			cursorset(d.mvfirst());
-		} else {
-			join(csdef, cedef, !exclam);
-			cursorset(csdef.mvfirst());
 		}
 	'D' =>
 		# toggle debug string

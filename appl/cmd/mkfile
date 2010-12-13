@@ -7,6 +7,7 @@ SYSMODULES=\
 	arg.m\
 	bufio.m\
 	draw.m\
+	names.m\
 	plumbmsg.m\
 	string.m\
 	sys.m\

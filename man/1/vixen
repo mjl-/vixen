@@ -234,6 +234,26 @@ mode is effectively the same as
 .I insert
 mode.  Erasing overwritten text reveals the original text again.
 
+.SS Plumbing
+Plumbing is supported through the non-visual
+.BR gP , gpp " and " gp<motion>
+commands, and the (identical) visual commands
+.BR gp " and " gP .
+Quick write and compile cycles are supported by the
+.B gb
+and
+.I ex'
+.B ":b [command]"
+commands.
+.I Vixen
+uses a helper program
+.I vixenplumb
+(not otherwise documented)
+to keep track of which files are being edited, and routes plumb requests accordingly or starts a new
+.IR vixen .
+
+.SH COMMANDS
+
 .SS Motion commands
 Motion commands set the insertion cursor.  While in visual select, they change the selection.  As modifier in commands, they indicate the range of text for the command to operate on.  Many motion commands can be prefixed by a repeat count (not starting with zero).  For example
 .B j
@@ -723,7 +743,7 @@ and plumb the standard output and standard error as message
 .I kind
 `newtext'.
 
-.SS "Ex commands"
+.SH EX COMMANDS
 .I "Ex commands"
 can be entered after pressing
 .BR :
@@ -859,54 +879,9 @@ Same as the
 .B ZZ
 command:  quit, but first write the buffer if it has unwritten modifications.
 .TP
-.B [range]d
-Delete the range.
-.TP
-.B "<text>
-Comment, ignored.
-.TP
 .B "cd <path>"
 Change working directory to
 .IR path .
-.TP
-.B "[range] co addr"
-Copy
-.I range
-to
-.IR addr .
-.TP
-.B "[range]ya [reg]
-Yank
-.I range
-into register
-.IR reg (
-register
-.B "
-by default).
-.TP
-.B "[range]pu [reg]
-Put contents of register
-.I reg
-(
-.B "
-by default)
-on the line after the end of
-.IR range .
-.TP
-[range]m addr
-Move
-.I range
-to
-.IR addr .
-.TP
-.BI = " or " addr=
-Without
-.IR addr ,
-prints the number of lines in the file.
-With
-.IR addr ,
-prints the first line number that matches
-.IR addr .
 .TP
 .B "f [filename]"
 If
@@ -914,31 +889,6 @@ If
 is absent, prints the current file name associated with the buffer.
 Otherwise sets the current filename for the buffer to
 .IR filename .
-.TP
-.B u
-Undo last change.  Same as
-.B u
-in
-.I command
-mode.
-.TP
-.B [range][<>] [count]
-Unindent or indent
-.IR range .
-If
-.I count
-was specified, indents
-.I count
-lines starting with the current.
-.TP
-.B [range]j[!]
-Join
-.I range
-(current and next line by default).
-Newlines are replaced with a space.
-If
-.I !
-was specified, newlines are removed instead of replaced by spaces.
 .TP
 .B D<chars>
 Toggle debug settings for
@@ -969,25 +919,7 @@ Also see
 command
 .BR gb .
 
-.SS Plumbing
-Plumbing is supported through the non-visual
-.BR gP , gpp " and " gp<motion>
-commands, and the (identical) visual commands
-.BR gp " and " gP .
-Quick write and compile cycles are supported by the
-.B gb
-and
-.I ex'
-.B ":b [command]"
-commands.
-.I Vixen
-uses a helper program
-.I vixenplumb
-(not otherwise documented)
-to keep track of which files are being edited, and routes plumb requests accordingly or starts a new
-.IR vixen .
-
-.SS Missing features
+.SH Missing features
 .I Vixen
 lacks many features and commands that other vi implementations do have.  Below, some of the more popular commands and features are listed.
 
@@ -1068,10 +1000,10 @@ Some featurse that likely won't be supported:
 .IR regex (6).
 .SH BUGS
 Many.
-.br
+.PP
 .I Vixen
 will not implement all commands and features found in the various vi clones, or the original vi.  The behaviour of some commands may be different, that could be a bug.
 .I Vixen
 also has features that the vi clones and the original vi do not have, such as plumbing.
-.br
+.PP
 Entire file is kept in memory twice:  in vixen and in Tk.

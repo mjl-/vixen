@@ -216,7 +216,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	util = load Util0 Util0->PATH;
 	util->init();
 
-	sys->pctl(Sys->NEWPGRP, nil);
+	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
 
 	arg->init(args);
 	arg->setusage(arg->progname()+" [-d debug] [-c macro] [-i] path");
@@ -229,7 +229,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 				case x := s[i] {
 				'+' =>		debug = array[128] of {* => 1};
 				'a' to 'z' =>	debug[x]++;
-				* =>		fail(sprint("debug char %c not ascii", s[i]));
+				* =>		fail(sprint("debug char %c a-z or +", x));
 				}
 		'i' =>	iflag++;
 		* =>	arg->usage();
@@ -295,12 +295,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 		else if(dir.mode & Sys->DMDIR)
 			statuswarn(sprint("%q is directory", filename));
 		else
-			fail(sprint("open %q: %s", filename, openerr));
+			statuswarn(sprint("open: %s", openerr));
 	}
 	if(iflag)
-		textfill(sys->fildes(0));
+		oerr := textfill(sys->fildes(0));
 	else if(filefd != nil)
-		textfill(filefd);
+		oerr = textfill(filefd);
+	if(oerr != nil)
+		statuswarn("reading: "+oerr);
 	tkaddeof();
 	up();
 
@@ -1203,11 +1205,11 @@ Change:
 }
 
 
-textfill(fd: ref Sys->FD)
+textfill(fd: ref Sys->FD): string
 {
 	b := bufio->fopen(fd, Sys->OREAD);
 	if(b == nil)
-		fail(sprint("fopen: %r"));
+		return sprint("fopen: %r");
 	s: string;
 	n := 0;
 	for(;;) {
@@ -1215,9 +1217,9 @@ textfill(fd: ref Sys->FD)
 		Bufio->EOF =>
 			tkcmd(".t.text insert end '"+s);
 			text.s = s;
-			return;
+			return nil;
 		bufio->ERROR =>
-			fail(sprint("read: %r"));
+			return sprint("read: %r");
 		* =>
 			s[n++] = x;
 		}

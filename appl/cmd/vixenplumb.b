@@ -15,6 +15,8 @@ include "plumbmsg.m";
 	Msg: import plumbmsg;
 include "sh.m";
 	sh: Sh;
+include "names.m";
+	names: Names;
 include "util0.m";
 	util: Util0;
 	warn, pid, kill, killgrp: import util;
@@ -57,6 +59,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 	plumbmsg = load Plumbmsg Plumbmsg->PATH;
 	sh = load Sh Sh->PATH;
 	sh->initialise();
+	names = load Names Names->PATH;
 	util = load Util0 Util0->PATH;
 	util->init();
 
@@ -87,8 +90,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 	msgc := chan of ref Msg;
 	spawn plumbreceiver(msgc);
 
-	if(pathpat != nil)
-		spawn edit(pathget(workdir(), pathpat));
+	if(pathpat != nil) {
+		wd := workdir();
+		spawn edit(wd, pathget(wd, pathpat));
+	}
 
 	spawn serve(fio, msgc);
 }
@@ -132,18 +137,16 @@ pathget(wd, pathpat: string): (string, string)
 		path = wd+"/"+path;
 	if(pat == nil)
 		pat = ".";
+	path = names->cleanname(path);
 	return (path, pat);
 }
 
-edit(pathpat: (string, string))
+edit(wd: string, pathpat: (string, string))
 {
 	sys->pctl(Sys->FORKNS, nil);  # separate working directory
 	(path, pat) := pathpat;
-	say(sprint("edit, pathpat %q %q", path, pat));
-	(dir, file) := str->splitstrr(path, "/");
-	if(dir != nil && sys->chdir(dir) >= 0)
-		path = file;
-	say(sprint("edit, dir %q, path %q, pat %q", dir, path, pat));
+	sys->chdir(wd);
+	say(sprint("edit, wd %q, path %q, pat %q", wd, path, pat));
 	if(pat == nil)
 		args := list of {"wm/vixen", path};
 	else
@@ -203,7 +206,7 @@ handle(m: ref Msg)
 		(path, pat) := pathget(m.dir, string m.data);
 		c := findpath(path);
 		if(c == nil) {
-			spawn edit((path, pat));
+			spawn edit(m.dir, (path, pat));
 		} else {
 			c.pending = pat;
 			respond(c);
@@ -211,7 +214,7 @@ handle(m: ref Msg)
 	"newtext" =>
 		c := findpath(m.dir);
 		if(c == nil) {
-			spawn editnew(m.dir, string m.data);
+			spawn editnew(names->cleanname(m.dir), string m.data);
 		} else {
 			c.pending = string m.data;
 			respond(c);

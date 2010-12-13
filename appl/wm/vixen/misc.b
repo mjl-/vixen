@@ -56,7 +56,7 @@ swapcase(s: string): string
 	return r;
 }
 
-# remove empty lines, replace newline by a space
+# remove empty lines, replace newline by a nothing or a space
 join(cs, ce: ref Cursor, space: int)
 {
 	s := text.get(cs, ce);
@@ -65,9 +65,11 @@ join(cs, ce: ref Cursor, space: int)
 	n := len s;
 	if(n >= 0 && s[n-1] == '\n')
 		--n;
+	lastnl := 0;  # offset in r at which last newline from s was collapsed
 	for(i := 0; i < n; i++)
 		case s[i] {
 		'\n' =>
+			lastnl = len r;
 			if(space)
 				r[len r] = ' ';
 			while(i+1 < len s && s[i+1] == '\n')
@@ -78,8 +80,8 @@ join(cs, ce: ref Cursor, space: int)
 	if(n == len s-1)
 		r[len r] = '\n';
 
-	textdel(Cchange|Csetcursorlo, cs, ce);
-	textins(Cchange, nil, r);
+	textrepl(Cchange, cs, ce, r);
+	cursorset(text.cursor(cs.o+lastnl));
 }
 
 hasnewline(s: string): int
