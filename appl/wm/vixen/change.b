@@ -15,6 +15,7 @@ Mod: adt {
 Change: adt {
 	inverted:	int;  # whether this is inverted.  significant for cursor position after applying
 	l:	list of ref Mod;  # hd of list is last modification (also at later positions in file)
+	ogen, ngen:	big;  # gen before and after this change
 
 	beginpos:	fn(c: self ref Change): Pos;
 	invert:		fn(c: self ref Change): ref Change;
@@ -53,7 +54,7 @@ Change.beginpos(c: self ref Change): Pos
 
 Change.invert(cc: self ref Change): ref Change
 {
-	c := ref Change (!cc.inverted, nil);
+	c := ref Change (!cc.inverted, nil, cc.ngen, cc.ogen);
 	for(l := rev(cc.l); l != nil; l = tl l)
 		c.l = (hd l).invert()::c.l;
 	return c;
@@ -61,7 +62,7 @@ Change.invert(cc: self ref Change): ref Change
 
 Change.text(c: self ref Change): string
 {
-	s := sprint("Change(inverted=%d\n", c.inverted);
+	s := sprint("Change(inverted=%d, ogen=%bd, ngen=%bd\n", c.inverted, c.ogen, c.ngen);
 	for(l := c.l; l != nil; l = tl l)
 		s += "\t"+(hd l).text()+"\n";
 	s += ")";

@@ -105,3 +105,9 @@ workdir(): string
 {
 	return sys->fd2path(sys->open(".", Sys->OREAD));
 }
+
+isdir(f: string): int
+{
+	(ok, d) := sys->stat(f);
+	return ok >= 0 && (d.mode & Sys->DMDIR);
+}

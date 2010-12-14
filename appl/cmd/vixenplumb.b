@@ -102,6 +102,8 @@ serve(fio: ref Sys->FileIO, msgc: chan of ref Msg)
 {
 	for(;;) alt {
 	m := <-msgc =>
+		if(m == nil)
+			fail("nil plumbmsg received");
 		handle(m);
 		
 	(nil, count, fid, rc) := <-fio.read =>
@@ -310,5 +312,6 @@ say(s: string)
 fail(s: string)
 {
 	warn(s);
+	killgrp(pid());
 	raise "fail:"+s;
 }

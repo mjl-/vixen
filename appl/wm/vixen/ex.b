@@ -173,8 +173,6 @@ ex0(excmd: string, dot: ref Cursor): string
 			return "range not allowed";
 
 		ofilename: string;
-		if(c.more() && (!w || c.char() != '/' && !str->in(c.char(), whitespace)))
-			return "trailing characters";
 		exreadsep(c, SepOptional);
 		append := 0;
 		if(c.more()) {

@@ -22,6 +22,7 @@ interpx()
 	say('i', sprint("interpx: mode %s, %s", modes[mode], cmdcur.text()));
 	cc := cmdcur.clone();
 	statustext = nil;
+	tkplumbclear();
 Interp:
 	while(cc.more()) {
 		{
@@ -507,7 +508,7 @@ visual(cc: ref Cmd)
 			kb->APP|'l' =>
 				redraw();
 			'o' =>
-				(cursor, visualstart) = ret(visualstart, cursor);
+				(cursor, visualstart) = (visualstart, cursor);
 				visualset();
 				cursorset(cursor);
 			'"' =>

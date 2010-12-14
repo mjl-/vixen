@@ -84,12 +84,16 @@ filestat: Sys->Dir;  # stat after previous read or write, to check before writin
 
 modified: int;  # whether text has unsaved changes
 text: ref Buf;  # contents
+textgen: big;   # generation of text, increased on each changed, restored on undo/redo.
+textgenlast: big;  # last used gen
 cursor: ref Cursor;  # current position in text
 
 statustext: string;  # info/warning/error text to display in status bar
 
-searchregex: Regex->Re;  # current search
-searchreverse: int;  # whether search is in reverse
+searchregex: Regex->Re;  # current search, set by [/?*#]
+searchreverse: int;  # whether search is in reverse, for [nN]
+searchcache: array of (int, int);  # cache of search results, only valid if textgen is searchcachegen.
+searchcachegen := big -1;
 
 lastfind: int;  # last find command, one of tTfF, for ';' and ','
 lastfindchar: int;  # parameter to lastfind
@@ -119,6 +123,7 @@ b3prev: ref Pos;  # previous position while button3 down
 statusvisible := 1;  # whether tk frame with status label is visible (and edit entry is not)
 
 highlightstart, highlightend: ref Cursor;  # range to highlight for search match, can be nil
+plumbvisible: int;  # whether address or last inserted text is visible (cleared on interp)
 
 vpfd: ref Sys->FD;  # fd to /chan/vixenplumb, for handling plumbing
 
@@ -151,6 +156,8 @@ tkcmds0 := array[] of {
 
 ".t.text tag configure eof -foreground blue -background white",
 ".t.text tag configure search -background yellow -foreground black",
+".t.text tag configure plumb -background blue -foreground white",
+".t.text tag raise sel",
 
 "pack .t.vscroll -fill y -side left",
 "pack .t.text -fill both -expand 1 -side right",
@@ -364,7 +371,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 				visualstart = text.pos(Pos.parse(hd l));
 				cursor = text.pos(Pos.parse(hd tl l));
 				if(Cursor.cmp(nc, cursor) < 0)
-					(cursor, visualstart) = ret(visualstart, cursor);
+					(cursor, visualstart) = (visualstart, cursor);
 				visualend = cursor.clone();
 				cursorset(cursor);
 			}
@@ -443,7 +450,10 @@ init(ctxt: ref Draw->Context, args: list of string)
 			continue;
 		}
 		if(iflag) {
-			textins(Cchange, text.end(), s);
+			ps := text.end();
+			textins(Cchange, ps, s);
+			tkplumbshow(ps.pos, text.end().pos);
+			tkcmd(sprint(".t.text see %s", ps.pos.text()));
 		} else {
 			nc: ref Cursor;
 			(nc, err) = address(Cmd.mk(s), cursor);
@@ -451,6 +461,7 @@ init(ctxt: ref Draw->Context, args: list of string)
 				statuswarn(sprint("bad address from vixenplumb: %q: %s", s, err));
 			} else {
 				cursorset(nc);
+				tkplumbshow(nc.mvcol(0).pos, nc.mvlineend(1).pos);
 				statuswarn(sprint("new address from vixenplumb: %s", s));
 			}
 		}
@@ -464,9 +475,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 filenameset(s: string)
 {
 	filename = names->cleanname(names->rooted(workdir(), s));
+	if(isdir(filename) && (filename != nil && filename[len filename-1] != '/'))
+		filename[len filename] = '/';
 	tkclient->settitle(top, "vixen "+filename);
 	if(vpfd != nil) {
-		if(sys->fprint(vpfd, "%s", filename) < 0)
+		f := filename;
+		if(f[len f-1] == '/')
+			f = f[:len f-1];
+		if(sys->fprint(vpfd, "%s", f) < 0)
 			statuswarn(sprint("telling vixenplumb about filename: %r"));
 	}
 }
@@ -552,11 +568,8 @@ editinput(e: string)
 
 			# key presses are interpreted by tk widget first, then sent here.
 			# on e.g. ^h of last char, we see an empty string in the entry, so we abort.
-			editempty := tkcmd(".e.edit get") == nil;
-			if(editempty) {
+			if(x != '\n' && tkcmd(".e.edit get") == nil)
 				editesc();
-				break;
-			}
 
 			# we get up/down and other specials too, they don't change the text
 			if((x & kb->Spec) != kb->Spec && x != '\t') {
@@ -720,6 +733,9 @@ changeadd(c: ref Change)
 		n[:] = changes;
 		changes = n;
 	}
+	if(c.ogen == c.ngen)
+		raise "storing a change with same orig as new gen?";
+	c.ngen = textgen;
 	say('u', "changeadd, storing:");
 	say('u', c.text());
 	changes[changeindex++] = c;
@@ -734,6 +750,7 @@ apply(c: ref Change): int
 		Ins =>	textins(Cnone, text.pos(m.p), m.s);
 		Del =>	textdel(Cnone, text.pos(m.p), text.cursor(m.o+len m.s));
 		}
+	textgen = c.ngen;
 	cursorset(text.pos(c.beginpos()));
 	return 1;
 }
@@ -761,6 +778,8 @@ redo()
 
 searchset(s: string): int
 {
+	searchcachegen = big -1;
+	searchcache = nil;
 	err: string;
 	(searchregex, err) = regex->compile(s, 0);
 	if(err != nil) {
@@ -773,20 +792,33 @@ searchset(s: string): int
 
 searchall(re: Regex->Re): array of (int, int)
 {
+	if(textgen == searchcachegen)
+		return searchcache;
+
 	l: list of (int, int);
 	o := 0;
-	for(;;) {
-		r := regex->executese(re, text.str(), (o, len text.str()), 1, 1);
-		if(len r == 0 || r[0].t0 < 0)
-			break;
-		l = r[0]::l;
-		o = r[0].t1;
+	s := text.str();
+	sol := 1;
+	while(o < len s) {
+		for(e := o; e < len s && s[e] != '\n'; ++e)
+			{}
+		r := regex->executese(re, s, (o, e), sol, 1);
+		if(len r >= 1 && r[0].t0 >= 0) {
+			l = r[0]::l;
+			o = r[0].t1;
+			sol = 0;
+		} else {
+			sol = 1;
+			o = e+1;
+		}
 	}
 	r := array[len l] of (int, int);
 	for(i := len r-1; i >= 0; --i) {
 		r[i] = hd l;
 		l = tl l;
 	}
+	searchcache = r;
+	searchcachegen = textgen;
 	return r;
 }
 
@@ -1038,7 +1070,7 @@ textdel(rec: int, a, b: ref Cursor)
 
 	swap := Cursor.cmp(a, b) > 0;
 	if(swap)
-		(a, b) = ret(b, a);
+		(a, b) = (b, a);
 	s := text.get(a, b);
 
 	rec &= Cchangemask;
@@ -1092,7 +1124,7 @@ Change:
 		if(rec == Cmod)
 			return statuswarn("beep!");
 		if(change == nil)
-			change = ref Change (0, nil);
+			change = ref Change (0, nil, textgen, ~big 0);
 		change.l = ref Mod.Del (a.o, a.pos, s)::change.l;
 	Cchangerepl =>
 		raise "should not happen";
@@ -1103,6 +1135,7 @@ Change:
 		xregput(register, s);
 	tkcmd(sprint(".t.text delete %s %s", a.pos.text(), b.pos.text()));
 	text.del(a, b);
+	textgen = textgenlast++;;
 	markfixdel(a, b);
 	if(rec != Cnone)
 		xmarkput('.', a);
@@ -1118,6 +1151,7 @@ Change:
 					os := m.s[nn:];
 					m.s = m.s[:nn];
 					text.ins(a, os);
+					textgen = textgenlast++;
 					markfixins(a, len os);
 					tkcmd(sprint(".t.text insert %s '%s", a.pos.text(), os));
 					if(a.o+len os >= text.chars())
@@ -1181,7 +1215,7 @@ Change:
 		}
 		if(!ins) {
 			if(change == nil)
-				change = ref Change (0, nil);
+				change = ref Change (0, nil, textgen, ~big 0);
 			change.l = ref Mod.Ins (c.o, c.pos, s)::change.l;
 		}
 		if(rec == Cchangerepl) {
@@ -1190,6 +1224,7 @@ Change:
 				(a, b) := (text.cursor(c.o), text.cursor(c.o+n));
 				tkcmd(sprint(".t.text delete %s %s", a.pos.text(), b.pos.text()));
 				os := text.del(a, b);
+				textgen = textgenlast++;
 				markfixdel(a, b);
 				if(tl change.l != nil) {
 					pick m := hd tl change.l {
@@ -1212,6 +1247,7 @@ Change:
 	if(c.o+len s >= text.chars())
 		tkcmd(sprint(".t.text tag remove eof %s {%s +%dc}", c.pos.text(), c.pos.text(), len s));
 	nc := text.ins(c, s);
+	textgen = textgenlast++;
 	markfixins(c, len s);
 	case setcursor {
 	0 =>	{}
@@ -1341,6 +1377,27 @@ statuswarn(s: string)
 	statusset();
 }
 
+statusset()
+{
+	s := sprint("%9s ", "("+modes[mode]+")");
+	if(recordreg >= 0)
+		s += "recording ";
+	if(filename == nil)
+		s += "(no filename)";
+	else
+		s += sprint("%q", names->basename(filename, nil));
+	s += sprint(", %4d lines, %5d chars, pos %s", text.lines(), text.chars(), cursor.pos.text());
+	if(cmdcur.rem() != nil)
+		s += ", "+cmdcur.rem();
+	if(statustext != nil)
+		s += ", "+statustext;
+	tkcmd(sprint(".s.status configure -text '%s", s));
+	if(!statusvisible) {
+		tkcmd("pack forget .e; pack .s -fill x -side bottom -after .t");
+		statusvisible = 1;
+	}
+}
+
 visualrange(): (ref Cursor, ref Cursor)
 {
 	(a, b) := Cursor.order(visualstart.clone(), visualend.clone());
@@ -1364,38 +1421,6 @@ tkselectionset(a, b: Pos)
 	tkcmd(sprint(".t.text tag add sel %s %s", a.text(), b.text()));
 }
 
-statusset()
-{
-	s := sprint("%9s ", "("+modes[mode]+")");
-	if(recordreg >= 0)
-		s += "recording ";
-	if(filename == nil)
-		s += "(no filename)";
-	else
-		s += sprint("%q", names->basename(filename, nil));
-	s += sprint(", %4d lines, %5d chars, pos %s", text.lines(), text.chars(), cursor.pos.text());
-	if(cmdcur.rem() != nil)
-		s += ", "+cmdcur.rem();
-	if(statustext != nil)
-		s += ", "+statustext;
-	tkcmd(sprint(".s.status configure -text '%s", s));
-	if(!statusvisible) {
-		tkcmd("pack forget .e; pack .s -fill x -side bottom -after .t");
-		statusvisible = 1;
-	}
-}
-
-statusclear()
-{
-	statustext = nil;
-	statusset();
-}
-
-
-ret[T](a, b: T): (T, T)
-{
-	return (a, b);
-}
 
 redraw()
 {
@@ -1411,6 +1436,7 @@ redraw()
 	cursorset(cursor);
 	if(highlightstart != nil)
 		tkhighlight(highlightstart, highlightend);
+	plumbvisible = 0;
 	tkcmd(sprint(".t.text see %s", spos.text()));
 }
 
@@ -1427,6 +1453,21 @@ tkhighlight(s, e: ref Cursor)
 	tkhighlightclear();
 	tkcmd(sprint(".t.text tag add search %s %s", s.pos.text(), e.pos.text()));
 	(highlightstart, highlightend) = (s, e);
+}
+
+tkplumbclear()
+{
+	if(plumbvisible) {
+		tkcmd(".t.text tag remove plumb 1.0 end");
+		plumbvisible = 0;
+	}
+}
+
+tkplumbshow(s, e: Pos)
+{
+	tkplumbclear();
+	tkcmd(sprint(".t.text tag add plumb %s %s", s.text(), e.text()));
+	plumbvisible = 1;
 }
 
 tkinsertset(p: Pos)

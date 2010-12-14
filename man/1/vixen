@@ -88,6 +88,8 @@ Under the window is the status bar, it contains the current mode, the buffer's f
 commands and searches, the status bar is temporarily replaced by a text entry widget.
 The end of the buffer is indicated by an EOT character in blue color on white background color.
 The insertion cursor is shown before the character it is positioned at.  The visual selection is indicated in reverse colors.
+A text search match is indicated with black text on a yellow background, after a change of the text the colors are removed.
+After an incoming plumb message, the added text or addressed line is indicated by white text on a blue background.  The colors are removed on the first key stroke or command.
 The edit entry, for ex commands and searches, has file name completion and a history.  Pressing
 .I tab
 interprets the word before the cursor as a filename completes it to the largest common prefix of the matches.  If the word is already the largest common prefix, each

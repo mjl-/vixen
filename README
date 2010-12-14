@@ -66,17 +66,14 @@ for now, it seems to be necessary to start vixenplumb manually before starting a
 
 # todo
 
-- fix '^' and '$' in searches
+- we crash when repeating (with '.') in visual mode, eg 'jj<'.
+- think of a good strategy to abort commands, especially in combination with macro execution.
 - make scrolling with ^e and ^y less slow.
 - only change cursor as side effect of scrolling window for ^u ^d ^b ^f.
 - fix annoying scrolling with ^e for last line.
 - treat tab as 8 spaces when moving cursor vertically.  makes cursor appear to move less horizontally when switching between lines with and without tabs.
 - column snap could be done for virtual column positions too, e.g. end of line
 - beep should be more visible, or audible
-- error messages are sometimes cleared from the status bar too soon, need a consistent approach.
-- for ex, when requiring whitespace, be okay without whitespace but where next char is some set of special chars, with at least '/' in the set?  eg for ":w/tmp/x".
-- think of a good strategy to abort commands, especially in combination with macro execution.
-- we crash when repeating (with '.') in visual mode, eg 'jj<'.
 - undo should undo a whole @<reg> execution.  test what the behaviour of '.' in a macro is.  and if there is a difference with 'q<reg>' recorded macro's.  original vi says:  "The undo command reverses an entire macro call as a unit, if it made any changes."  but that does not say if there is something different for recorded macro's...
 - fix '*' and '#', they should search for whole words.  so before & after should be begin/end or non-text (whitespace or interpunction)
 - ':e[!] filename' command
