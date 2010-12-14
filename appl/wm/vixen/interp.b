@@ -450,7 +450,8 @@ visual(cc: ref Cmd)
 	case x := c.xget() {
 	kb->Esc =>
 		xabort(nil);
-	'd' =>
+	'd' or
+	'D' =>
 		textdel(Cchange|Csetcursorlo|Csetreg, vs, ve);
 	'p' =>
 		textrepl(Cchange|Csetcursorlo, vs, ve, xregget(register));
@@ -764,17 +765,17 @@ command(cc: ref Cmd)
 				}
 		'q' =>
 			recordq(c);
-		'v' or
-		'V' =>
-			if(x == 'v')
-				modeset(Visual);
-			else
-				modeset(Visualline);
-			visualstart = cursor.clone();
-			visualend = visualstart.clone();
-			visualset();
 		* =>
 			case x {
+			'v' or
+			'V' =>
+				if(x == 'v')
+					modeset(Visual);
+				else
+					modeset(Visualline);
+				visualstart = cursor.clone();
+				visualend = visualstart.clone();
+				visualset();
 			'c' =>
 				(num2, ce) := commandmove(c, num1, 'c');
 				if(ce == nil)
