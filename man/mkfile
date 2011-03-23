@@ -4,6 +4,3 @@ MAN=\
 	1/vixen\
 
 <mkman
-
-nuke:QV:
-	

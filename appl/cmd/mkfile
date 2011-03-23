@@ -11,7 +11,6 @@ SYSMODULES=\
 	plumbmsg.m\
 	string.m\
 	sys.m\
-	util0.m\
 
 DISBIN=$ROOT/dis
 

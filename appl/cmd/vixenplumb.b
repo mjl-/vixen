@@ -17,9 +17,6 @@ include "sh.m";
 	sh: Sh;
 include "names.m";
 	names: Names;
-include "util0.m";
-	util: Util0;
-	warn, pid, kill, killgrp: import util;
 
 Vixenplumb: module {
 	init:	fn(ctxt: ref Draw->Context, argv: list of string);
@@ -60,8 +57,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 	sh = load Sh Sh->PATH;
 	sh->initialise();
 	names = load Names Names->PATH;
-	util = load Util0 Util0->PATH;
-	util->init();
 
 	sys->pctl(Sys->NEWPGRP, nil);
 
@@ -303,10 +298,35 @@ workdir(): string
 	return sys->fd2path(sys->open(".", Sys->OREAD));
 }
 
+pid(): int
+{
+	return sys->pctl(0, nil);
+}
+
+progctl(pid: int, s: string)
+{
+	sys->fprint(sys->open(sprint("/prog/%d/ctl", pid), sys->OWRITE), "%s", s);
+}
+
+kill(pid: int)
+{
+	progctl(pid, "kill");
+}
+
+killgrp(pid: int)
+{
+	progctl(pid, "killgrp");
+}
+
 say(s: string)
 {
 	if(dflag)
 		warn(s);
+}
+
+warn(s: string)
+{
+	sys->fprint(sys->fildes(2), "%s\n", s);
 }
 
 fail(s: string)

@@ -16,8 +16,6 @@ see the manual page for more information.
 
 # install
 
-first, make sure you have "util" installed.
-
 change the "mkconfig" if you do not have $ROOT set.  now "mk install"
 to compile and install the files.
 
@@ -66,6 +64,19 @@ for now, it seems to be necessary to start vixenplumb manually before starting a
 
 # todo
 
+- ^g should display percentage of cursor in file.
+- after typing on a line, hitting esc, then moving to next line puts cursor at wrong position.
+- 'r' on first char of line skips to next char, should stay.
+- b3 on text that has no plumb destination should be searched for as if '*' had been pressed on it
+- 'Tx' on first line, without x on that line loops
+- "mk install" by default for 'gb'
+- column position is wrong after many operations, eg 'dw'.
+- for newtext, try to make the end of the new text visible too.
+- redo after an insertion has an annoying delay
+- on join, collapse leading whitespace of lines into separate (space or nothing)?
+- :s on (visual) selection spanning multiple lines, treats !g as "change only once in buffer", it should "one change _per line_".
+- 'b' at the end of " x := <-somechan" moves to before the '-', it should move to before 's'.
+- at startup, set width&height in characters and lines, not in pixels.
 - think of a good strategy to abort commands, especially in combination with macro execution.
 - make scrolling with ^e and ^y less slow.
 - only change cursor as side effect of scrolling window for ^u ^d ^b ^f.

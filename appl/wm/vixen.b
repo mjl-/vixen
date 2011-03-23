@@ -26,9 +26,6 @@ include "names.m";
 	names: Names;
 include "sh.m";
 	sh: Sh;
-include "util0.m";
-	util: Util0;
-	warn, pid, kill, killgrp, min, max, abs, l2a, rev: import util;
 
 include "vixen/buffers.b";
 include "vixen/change.b";
@@ -220,8 +217,6 @@ init(ctxt: ref Draw->Context, args: list of string)
 	names = load Names Names->PATH;
 	sh = load Sh Sh->PATH;
 	sh->initialise();
-	util = load Util0 Util0->PATH;
-	util->init();
 
 	sys->pctl(Sys->NEWPGRP|Sys->FORKNS, nil);
 
@@ -1546,6 +1541,69 @@ quit()
 {
 	killgrp(pid());
 	exit;
+}
+
+pid(): int
+{
+	return sys->pctl(0, nil);
+}
+
+progctl(pid: int, s: string)
+{
+	sys->fprint(sys->open(sprint("/prog/%d/ctl", pid), sys->OWRITE), "%s", s);
+}
+
+kill(pid: int)
+{
+	progctl(pid, "kill");
+}
+
+killgrp(pid: int)
+{
+	progctl(pid, "killgrp");
+}
+
+min(a, b: int): int
+{
+	if(a < b)
+		return a;
+	return b;
+}
+
+max(a, b: int): int
+{
+	if(a > b)
+		return a;
+	return b;
+}
+
+abs(a: int): int
+{
+	if(a < 0)
+		a = -a;
+	return a;
+}
+
+l2a[T](l: list of T): array of T
+{
+	a := array[len l] of T;
+	i := 0;
+	for(; l != nil; l = tl l)
+		a[i++] = hd l;
+	return a;
+}
+
+rev[T](l: list of T): list of T
+{
+	r: list of T;
+	for(; l != nil; l = tl l)
+		r = hd l::r;
+	return r;
+}
+
+warn(s: string)
+{
+	sys->fprint(sys->fildes(2), "%s\n", s);
 }
 
 say(c: int, s: string)
